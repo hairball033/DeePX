@@ -1,0 +1,50 @@
+name: Import DeePX source into repository root
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/import-deePX-source.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  import-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract the canonical DeePX source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s DeePX.zip
+          mkdir -p "$RUNNER_TEMP/deepx-import"
+          unzip -q DeePX.zip -d "$RUNNER_TEMP/deepx-import"
+          test -d "$RUNNER_TEMP/deepx-import/DeePX"
+          for required in compose-launcher module module-legacy module-universal scripts third_party; do
+            test -d "$RUNNER_TEMP/deepx-import/DeePX/$required"
+          done
+          rsync -a "$RUNNER_TEMP/deepx-import/DeePX/" ./
+          rm -f .github/workflows/import-deePX-source.yml
+          echo "Extracted files: $(find . -type f -not -path './.git/*' | wc -l)"
+          echo "Source directories:"
+          printf '%s\n' compose-launcher module module-legacy module-universal scripts third_party | while read -r d; do test -d "$d"; done
+
+      - name: Commit extracted project
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+            exit 0
+          fi
+          git commit -m "Import complete DeePX source from DeePX.zip"
+          git push origin HEAD:main

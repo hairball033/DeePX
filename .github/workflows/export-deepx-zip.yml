@@ -1,0 +1,23 @@
+name: Export DeePX source archive
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/export-deepx-zip.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: write
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source archive
+        run: test -s DeePX.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DeePX-source-archive
+          path: DeePX.zip
+          if-no-files-found: error
+          retention-days: 1

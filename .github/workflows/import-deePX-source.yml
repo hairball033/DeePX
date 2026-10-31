@@ -31,7 +31,7 @@ jobs:
           for required in compose-launcher module module-legacy module-universal scripts third_party; do
             test -d "$RUNNER_TEMP/deepx-import/DeePX/$required"
           done
-          rsync -a "$RUNNER_TEMP/deepx-import/DeePX/" ./
+          rsync -a --exclude='.github/workflows/build.yml' "$RUNNER_TEMP/deepx-import/DeePX/" ./
           rm -f .github/workflows/import-deePX-source.yml
           echo "Extracted files: $(find . -type f -not -path './.git/*' | wc -l)"
           printf '%s\n' compose-launcher module module-legacy module-universal scripts third_party | while read -r d; do test -d "$d"; done

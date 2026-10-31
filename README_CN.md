@@ -2,7 +2,7 @@
 
 DeePX 是面向官方 DeepSeek Android App 的独立 LSPosed/Xposed 模块。它运行在 DeepSeek 进程中，
 提供模块设置入口、界面同化与功能增强。本项目基于 [Deekseep LSPosed](https://github.com/lllucccian/Deekseep)
-继续开发，当前主线适配 **DeepSeek 2.7.1**（向下兼容 2.5.3 / 2.5.2 / 2.4.1 等旧版）。本项目不是 DeepSeek 官方项目，与 DeepSeek 官方无任何关联。
+继续开发，当前主线适配 **DeepSeek 2.5.3**。本项目不是 DeepSeek 官方项目，与 DeepSeek 官方无任何关联。
 
 [English](README.md) | [更新日志 (Changelog)](CHANGELOG.md)
 
@@ -24,13 +24,8 @@ DeePX 是面向官方 DeepSeek Android App 的独立 LSPosed/Xposed 模块。它
 
 ## 当前版本
 
-- 模块版本：**1.1**
-- 适配宿主（国内版 DeepSeek）：
-  - **2.7.1**（versionName 2.7.1 / versionCode 287）← 当前主线
-  - 2.5.3（versionName 2.5.3 / versionCode 275）
-  - 2.5.2（versionCode 273）
-  - 2.4.1（versionCode 257）
-  - 2.3.6 / 2.3.4 / 2.3.0
+- 模块版本：**1.0.0 Beta (20260926)**
+- 适配宿主：国内版 DeepSeek **2.5.3**（versionName 2.5.3 / versionCode 275）
 - 编译参数：`minSdk 24`、`targetSdk 37`、`compileSdk 37`
 
 ## 环境要求

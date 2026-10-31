@@ -1,0 +1,1719 @@
+package com.smallhairball.deepx;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+
+/**
+ * Runtime symbols for the supported DeepSeek host generations.
+ *
+ * <p>DeepSeek is minified with R8, so an application update can rename every host class while
+ * keeping the actual contract unchanged.  Callers always use the 2.2.x symbol as the stable
+ * logical key; this class translates it only when the installed host is the 2.3.0 generation.
+ * Keeping the legacy path as an identity mapping is intentional: one module APK therefore works
+ * with both host families.</p>
+ */
+public final class HostCompat {
+    private static volatile boolean initialized;
+    private static volatile boolean v230;
+    private static volatile boolean v234;
+    private static volatile boolean v236;
+    private static volatile boolean v241;
+    private static volatile boolean v250;
+    private static volatile boolean v252;
+    private static volatile boolean v253;
+    private static volatile boolean googlePlay;
+    /**
+     * 2.2.1 moved Kotlin Unit out of the Compose helper named {@code ui8}.  The
+     * 2.2.2 host restored the old static singleton shape, so treating both 2.2
+     * builds as one mapping would make reflection call a non-static field with a
+     * null receiver and disable the entire bubble/input hook.
+     */
+    private static volatile boolean legacyUnitUsesTi8;
+
+    private HostCompat() {}
+
+    static synchronized void initialize(ClassLoader loader) {
+        if (initialized) return;
+        googlePlay = classExists(loader, "com.pairip.licensecheck.LicenseActivity");
+        // 2.5.2 (mainland versionCode 273) is a fresh R8 generation after 2.5.0. Verified by
+        // decompiling the installed APK: ChatFullCompletionRequest moved r51 -> e41 (same 11-arg
+        // String/Integer/String/List/boolean*3/String/String/String/int constructor), its
+        // kotlinx serializer is c41, ChatEditMessageRequest moved to f31 (serializer d31), and the
+        // chat request transport marker interface h21 -> u01 (e41/f31 both "implements u01").
+        // Detect it by the e41 contract so it never falls through to the retired-host notice.
+        v252 = hasV252CompletionRequest(loader);
+        // 2.5.3 (mainland versionCode 275) is yet another fresh R8 generation after 2.5.2.
+        // Verified by decompiling the installed APK: ChatFullCompletionRequest moved e41 -> zh1
+        // (same 11-arg String/Integer/String/List/boolean*3/String/String/String/int constructor,
+        // full-library unique), and its transport marker interface moved u01 -> pe1 (zh1
+        // "implements pe1"). Detect it by the zh1 contract so 2.5.3 never falls through to the
+        // retired-host notice. Set BEFORE v250 so the r51-based v250 probe can exclude it.
+        v253 = hasV253CompletionRequest(loader);
+        // 2.5.0 (versionCode 268, verified against the Google Play APK) dropped the pairip
+        // protector entirely: com.pairip.licensecheck.LicenseActivity no longer exists in this
+        // build at all, so the marker above cannot distinguish Google Play from mainland for
+        // this generation. Only the Google Play flavor has been analyzed so far; treat a
+        // verified v250 host as Google Play rather than guess a mainland table, the same way
+        // v236 above declines to guess an unverified GP 2.3.6 table.
+        v250 = !v252 && !v253 && hasV250CompletionRequest(loader);
+        if (v250) googlePlay = true;
+        v241 = !v252 && !v253 && !googlePlay && hasCompletionRequest(loader, "az0");
+        v234 = !v252 && !v253 && (v241 || hasCompletionRequest(loader, googlePlay ? "gz0" : "nx0"));
+        // Mainland 2.3.6 keeps the 2.3.4 completion request name but moves the chat ViewModel
+        // from kd1 to td1. Do not use mere kd1 absence as a marker: 2.3.6 reuses kd1 for the
+        // ViewModel's coroutine continuation, so both names legitimately exist in that APK.
+        // Match td1's actual ViewModel contract instead. A GP 2.3.6 table is intentionally not
+        // guessed without its APK.
+        v236 = !v241 && !googlePlay && !v253 && v234 && hasV236ChatViewModel(loader);
+        v230 = v234 || hasV230CompletionRequest(loader);
+        // 2.5.2 (code273) renames every symbol but keeps the 2.4.1 behavioural contract. Ride the
+        // 2.4.1 branch globally so the many internal `v241 ?` call sites (method-name table,
+        // editor session-state field, login/agent pipelines) resolve to their 2.4.1 shapes, while
+        // name252() translates the class names to code273. Set AFTER v236 is derived so it cannot
+        // perturb any other generation probe.
+        if (v252 || v253) v241 = true;
+        legacyUnitUsesTi8 = !v230 && hasNonStaticUi8Unit(loader);
+        initialized = true;
+    }
+
+    public static boolean isV230() {
+        return v230;
+    }
+
+    static boolean isV234() {
+        return v234;
+    }
+
+    static boolean isV236() {
+        return v236;
+    }
+
+    static boolean isV241() {
+        // 2.5.2 (code273) renames every symbol but keeps the 2.4.1 behavioural contract: the
+        // chat pipeline, session/message model and repository call shapes all match code257.
+        // Rather than fork hundreds of call sites, a 2.5.2 host rides the 2.4.1 branch and the
+        // symbol layer (name252) translates az0/jw/rp/... to their code273 equivalents. Any site
+        // that turns out to differ on 2.5.2 gets an explicit isV252() split later.
+        return v241 || v252 || v253;
+    }
+
+    static boolean isV250() {
+        return v250;
+    }
+
+    static boolean isV252() {
+        return v252;
+    }
+
+    static boolean isV253() {
+        return v253;
+    }
+
+    static boolean isGooglePlay() {
+        return googlePlay;
+    }
+
+    /**
+     * Hosts that still have a maintained, verified symbol table.  Do not let a package which
+     * merely shares DeepSeek's application id fall through to the old 2.2 mapping: that path
+     * would install stale hooks and can make the protected watchdog terminate the host.
+     */
+    static boolean supportsMaintainedFeatureRuntime() {
+        return v252 || v250 || v234 || v236 || v241;
+    }
+
+    static String diagnosticSummary() {
+        return "channel=" + (googlePlay ? "google-play" : "mainland")
+                + "\ngeneration=" + (v252 ? "2.5.2" : v250 ? "2.5.0" : v241 ? "2.4.1"
+                : v236 ? "2.3.6" : v234 ? "2.3.4" : v230 ? "2.3.0" : "2.2.x")
+                + "\nlegacyUnit=" + (legacyUnitUsesTi8 ? "ti8" : "ui8");
+    }
+
+    /** 2.3.0 moved the canonical editor session state list from field e to f. */
+    static String editorSessionStateField() {
+        // code257 jh moved the canonical SnapshotStateList to f; e is now an unrelated t92.
+        // Reading e made the module miss every live directory mutation until process restart.
+        // code249 fh.e(lq) appends through bh1 into fh.f (yz7 SnapshotStateList). fh.e is m62.
+        return v241 ? "f" : v236 ? "f" : v230 ? "f" : "e";
+    }
+
+    static String generationName() {
+        if (v252) return "2.5.2/code273-cn";
+        if (v250) return "2.5.0/code268-gp";
+        if (v241) return "2.4.1/code257-cn";
+        if (v236) return "2.3.6/code249-cn";
+        if (v234) return googlePlay ? "2.3.4/code246-gp" : "2.3.4/code245-cn";
+        return v230 ? "2.3.0/code237" : "2.2.x";
+    }
+
+    static boolean supportsHostVersionName(String versionName) {
+        if (versionName == null) return true;
+        String value = normalizedVersionName(versionName);
+        return "2.2.1".equals(value)
+                || "2.2.2".equals(value)
+                || "2.3.4".equals(value) || "2.3.6".equals(value)
+                || "2.4.1".equals(value) || "2.5.0".equals(value)
+                || "2.5.2".equals(value);
+    }
+
+    static boolean isRetiredVersionName(String versionName) {
+        String value = normalizedVersionName(versionName);
+        return "2.2.0".equals(value) || "2.3.0".equals(value)
+                || "2.3.1".equals(value);
+    }
+
+    private static String normalizedVersionName(String versionName) {
+        if (versionName == null) return "";
+        String value = versionName.trim();
+        int suffix = value.indexOf('-');
+        return suffix > 0 ? value.substring(0, suffix) : value;
+    }
+
+    static String localApiAuthInterceptorClass() {
+        if (v241) return "of0";
+        if (v236) return "se0";
+        if (v234) return googlePlay ? "eg0" : "se0";
+        return v230 ? "td0" : "id0";
+    }
+
+    static String localApiHeaderBuilderClass() {
+        if (v241) return "gv3";
+        if (v236) return "lq3";
+        if (v234) return googlePlay ? "gs3" : "cq3";
+        return v230 ? "tm3" : "jk3";
+    }
+
+    static String localApiHeaderSetterMethod() {
+        return v230 && !v234 ? "k0" : "l0";
+    }
+
+    /** Native event dispatched by DeepSeek's own "continue generating" button. */
+    static String resumeMessageEventClass() {
+        if (v236) return "xc1";
+        if (v234) return googlePlay ? "ce1" : "oc1";
+        return v230 ? "ab1" : "ba1";
+    }
+
+    /** Chat ViewModel reducer that consumes every native composer event. */
+    static String resumeMessageHandlerMethod() {
+        return "D";
+    }
+
+    static String unitClass() {
+        if (v253) return "via";
+        if (v252) return "lp9";
+        if (v241) return "d39";
+        if (v236) return "mu8";
+        if (v234) return googlePlay ? "hy8" : "fu8";
+        if (v230) return "vl8";
+        return legacyUnitUsesTi8 ? "ti8" : "ui8";
+    }
+
+    static String unitField() {
+        return "a";
+    }
+
+    private static boolean hasNonStaticUi8Unit(ClassLoader loader) {
+        try {
+            Class<?> ui8 = Class.forName("ui8", false, loader);
+            java.lang.reflect.Field field = ui8.getDeclaredField("a");
+            return !java.lang.reflect.Modifier.isStatic(field.getModifiers());
+        } catch (Throwable ignored) {
+            // If the probe itself is unavailable, keep the established 2.2.2
+            // mapping; the normal constructor will report a precise failure.
+            return false;
+        }
+    }
+
+    private static boolean classExists(ClassLoader loader, String name) {
+        try {
+            Class.forName(name, false, loader);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    static boolean hasV236ChatViewModel(ClassLoader loader) {
+        try {
+            Class<?> candidate = Class.forName("td1", false, loader);
+            boolean sessionGetter = false;
+            boolean reducer = false;
+            for (Method method : candidate.getDeclaredMethods()) {
+                Class<?>[] p = method.getParameterTypes();
+                if ("G".equals(method.getName()) && p.length == 0
+                        && "lq".equals(method.getReturnType().getSimpleName())) {
+                    sessionGetter = true;
+                } else if ("M".equals(method.getName()) && p.length == 2
+                        && method.getReturnType() == void.class) {
+                    reducer = true;
+                }
+            }
+            return sessionGetter && reducer;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static boolean hasCompletionRequest(ClassLoader loader, String name) {
+        try {
+            Class<?> candidate = Class.forName(name, false, loader);
+            for (Constructor<?> constructor : candidate.getDeclaredConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                if (p.length == 11
+                        && p[0] == String.class
+                        && p[2] == String.class
+                        && p[4] == boolean.class
+                        && p[5] == boolean.class
+                        && p[7] == boolean.class
+                        && p[8] == String.class
+                        && p[9] == String.class
+                        && p[10] == int.class) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * The old host also happens to contain an unrelated class named qw0.  Checking the complete
+     * request-constructor shape avoids treating that coincidence as a generation marker.
+     */
+    private static boolean hasV230CompletionRequest(ClassLoader loader) {
+        try {
+            // 2.2.x keeps the request data class as ew0.  Some 2.2 builds also contain a
+            // coroutine helper named qw0 whose constructor happens to resemble the 2.3 request
+            // shape when viewed through an obfuscating class loader, so positively identify the
+            // legacy request first instead of relying on qw0 alone.
+            Class<?> legacy = Class.forName("ew0", false, loader);
+            for (Constructor<?> constructor : legacy.getDeclaredConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                if (p.length == 11
+                        && p[0] == int.class
+                        && p[1] == String.class
+                        && p[2] == Integer.class
+                        && p[3] == String.class
+                        && p[4] == java.util.List.class
+                        && p[5] == boolean.class
+                        && p[6] == boolean.class
+                        && p[7] == String.class
+                        && p[8] == boolean.class
+                        && p[9] == String.class
+                        && p[10] == String.class) {
+                    return false;
+                }
+            }
+        } catch (Throwable ignored) {}
+        try {
+            Class<?> candidate = Class.forName("qw0", false, loader);
+            for (Constructor<?> constructor : candidate.getDeclaredConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                if (p.length == 11
+                        && p[0] == String.class
+                        && p[2] == String.class
+                        && p[4] == boolean.class
+                        && p[5] == boolean.class
+                        && p[7] == boolean.class
+                        && p[8] == String.class
+                        && p[9] == String.class
+                        && p[10] == int.class) {
+                    // The 2.3 request class implements the ct0 transport contract. Require that
+                    // marker as well so an unrelated old qw0 cannot flip the whole host table.
+                    for (Class<?> iface : candidate.getInterfaces()) {
+                        if (iface != null && "ct0".equals(iface.getSimpleName())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * DeepSeek 2.5.3 (mainland versionCode 275) rebuilt the chat request family again in a fresh
+     * R8 pass: ChatFullCompletionRequest moved {@code e41 -> zh1} (identical 11-arg constructor
+     * String/Integer/String/List/boolean*3/String/String/String/int, full-library unique) and its
+     * transport marker interface moved {@code u01 -> pe1} (zh1 "implements pe1"). Verified against
+     * the decompiled installed APK. Recognizing the contract (not just the class name) also guards
+     * against an unrelated future class named zh1.
+     */
+    private static boolean hasV253CompletionRequest(ClassLoader loader) {
+        try {
+            Class<?> candidate = Class.forName("zh1", false, loader);
+            for (Constructor<?> constructor : candidate.getDeclaredConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                if (p.length == 11
+                        && p[0] == String.class
+                        && p[2] == String.class
+                        && p[4] == boolean.class
+                        && p[5] == boolean.class
+                        && p[7] == boolean.class
+                        && p[8] == String.class
+                        && p[9] == String.class
+                        && p[10] == int.class) {
+                    for (Class<?> iface : candidate.getInterfaces()) {
+                        if (iface != null && "pe1".equals(iface.getSimpleName())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * DeepSeek 2.5.0 renamed the completion-request data class to r51 and reordered its
+     * declared fields, but its real (non-synthetic) constructor keeps the classic 11-arg
+     * shape checked by {@link #hasCompletionRequest}. Match it under its own name and, like
+     * {@link #hasV230CompletionRequest}'s ct0 check, require r51's h21 transport marker
+     * interface as well, so an unrelated future class coincidentally named r51 cannot flip
+     * this whole table.
+     */
+    private static boolean hasV250CompletionRequest(ClassLoader loader) {
+        try {
+            Class<?> candidate = Class.forName("r51", false, loader);
+            for (Constructor<?> constructor : candidate.getDeclaredConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                if (p.length == 11
+                        && p[0] == String.class
+                        && p[2] == String.class
+                        && p[4] == boolean.class
+                        && p[5] == boolean.class
+                        && p[7] == boolean.class
+                        && p[8] == String.class
+                        && p[9] == String.class
+                        && p[10] == int.class) {
+                    for (Class<?> iface : candidate.getInterfaces()) {
+                        if (iface != null && "h21".equals(iface.getSimpleName())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * DeepSeek 2.5.2 (mainland versionCode 273) rebuilt the chat request family in a fresh R8
+     * pass: ChatFullCompletionRequest moved {@code r51 -> e41} (identical 11-arg constructor
+     * String/Integer/String/List/boolean*3/String/String/String/int) and its transport marker
+     * interface {@code h21 -> u01}. Verified against the decompiled installed APK by matching the
+     * kotlinx serializer {@code c41}, whose descriptor still carries the wire name
+     * "com.deepseek.chat.network.chat.model.chat.ChatFullCompletionRequest". Recognizing the
+     * contract (not just the class name) also guards against an unrelated future class named e41.
+     */
+    private static boolean hasV252CompletionRequest(ClassLoader loader) {
+        try {
+            Class<?> candidate = Class.forName("e41", false, loader);
+            for (Constructor<?> constructor : candidate.getDeclaredConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                if (p.length == 11
+                        && p[0] == String.class
+                        && p[2] == String.class
+                        && p[4] == boolean.class
+                        && p[5] == boolean.class
+                        && p[7] == boolean.class
+                        && p[8] == String.class
+                        && p[9] == String.class
+                        && p[10] == int.class) {
+                    for (Class<?> iface : candidate.getInterfaces()) {
+                        if (iface != null && "u01".equals(iface.getSimpleName())) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+        return false;
+    }
+
+    /**
+     * 2.5.0 kotlinx.serialization request classes, identified by grepping the wire field
+     * names captured from a live MITM session against the decompiled sources (R8 keeps
+     * serialization field-name string constants even when it renames everything else).
+     * These are intentionally exposed as their own v250-only accessors rather than chained
+     * into the shared cross-generation helpers above: no other 2.5.0 feature symbol
+     * (local API interceptor, editor session field, unit class, etc.) has been verified yet,
+     * and guessing them the way the rest of this file avoids guessing would be worse than
+     * leaving the feature hooks unported until a follow-up pass verifies each one.
+     */
+    static String v250ChatFullCompletionRequestClass() {
+        // com.deepseek.chat.network.chat.model.chat.ChatFullCompletionRequest. Fields in
+        // declared/serialized order: chat_session_id, parent_message_id, prompt, ref_file_ids,
+        // thinking_enabled, search_enabled, audio_id, preempt, model_type, action.
+        return v250 ? "r51" : null;
+    }
+
+    static String v250ChatEditMessageRequestClass() {
+        // com.deepseek.chat.network.chat.model.chat.ChatEditMessageRequest. Fields:
+        // chat_session_id, message_id, prompt, ref_file_ids, thinking_enabled, search_enabled,
+        // client_stream_id, action.
+        return v250 ? "s41" : null;
+    }
+
+    /**
+     * Repository class owning every 2.5.0 chat-completion suspend method (I, J, h0, v, B,
+     * o0, ...). R8 has horizontally merged this class with large amounts of unrelated
+     * vector-drawable/Path/PorterDuff/Typeface utility code, so it is not a normal
+     * single-purpose ViewModel/repository -- do not assume an arbitrary method on it is
+     * chat-related without checking its body.
+     */
+    static String v250ChatRepositoryClass() {
+        return v250 ? "b18" : null;
+    }
+
+    /**
+     * Sends a brand-new user message. Builds {@link #v250ChatFullCompletionRequestClass()}
+     * through an inner coroutine flow body (class c41) and submits it. Confirmed as the
+     * "new message" entry point: it is called from exactly two sites, the merged ViewModel
+     * class kp1 (the live UI action) and its own generated coroutine continuation d41, and it
+     * performs a local optimistic message insert before delegating (through the b18.o0 helper)
+     * into the network flow.
+     */
+    static String v250SendCompletionMethod() {
+        return v250 ? "I" : null;
+    }
+
+    /**
+     * Edits a previous message and regenerates from it. Builds
+     * {@link #v250ChatEditMessageRequestClass()} through the same c41 flow-body class (its
+     * alternate constructor overload). Confirmed the same way as {@link
+     * #v250SendCompletionMethod()}: called only from kp1 and its own continuation e41.
+     */
+    static String v250EditCompletionMethod() {
+        return v250 ? "J" : null;
+    }
+
+    public static Class<?> load(ClassLoader loader, String legacyName)
+            throws ClassNotFoundException {
+        return loader.loadClass(name(legacyName));
+    }
+
+    public static String name(String legacyName) {
+        if (legacyName == null) return null;
+        if (v253) {
+            // 2.5.3's R8 pass recycles 2.3.x-era names onto unrelated types, so the generation
+            // chain below silently lands on collisions for the streamed message fragments:
+            // "fo2" stops on the interface `us2`, which made the agent live-response hooks
+            // install x0 without a single exception in the log. Pin the verified 2.5.3
+            // counterparts directly; all four were matched shape-for-shape against the 2.5.3
+            // decompile (fields / ctors / JSON-patch methods identical, only names changed).
+            switch (legacyName) {
+                case "fo2": return "jl3"; // live RESPONSE fragment  (2.4.1 rw2)
+                case "ho2": return "ll3"; // live THINKING fragment  (2.4.1 tw2)
+                case "at7": return "cl9"; // static RESPONSE fragment (2.4.1 tc8)
+                case "ht7": return "kl9"; // static THINKING fragment (2.4.1 ad8)
+                case "za1": return "e22"; // chat session component (2.4.1 zg1; capture hooks key on this)
+                case "h1": return "p1";   // persistent list type (2.4.1 n1; f0's attachment vector)
+                case "jm7": return "de9"; // empty attachment singleton (2.4.1 w58; de9.b is the p1-branch empty)
+                default: break;
+            }
+        }
+        // 2.5.2 / 2.5.3 descend from 2.4.1, but their version flags force v230 / v234 / v236 to
+        // false. That silently skipped the legacy tables, so every legacy symbol (cy4, px4, tw,
+        // jm7, u82, ...) reached name252 / name253 untranslated and the dependent features
+        // (login unlock, prompt injection, image upload, expert mode, whale motion) all died.
+        // Run the same legacy chain 2.4.1 uses here. Names the tables do not know pass through
+        // untouched, so 2.4.1-era short names still land on name252 / name253 unchanged.
+        if (v253) return name253(name241(name234(name230(legacyName))));
+        if (v252) return name252(name241(name234(name230(legacyName))));
+        String v230Name = v230 ? name230(legacyName) : legacyName;
+        String v234Name = v234 ? name234(v230Name) : v230Name;
+        String v236Name = v236 ? name236(v234Name) : v234Name;
+        if (v241) return name241(v236Name);
+        return v236Name;
+    }
+
+    /** Mainland 2.4.1/code257 symbols, keyed by their reviewed 2.3.6 counterparts. */
+    private static String name241(String name236) {
+        if (name236 == null) return null;
+        switch (name236) {
+            // The session/message pair is not part of the broad generated table: 2.4.1
+            // inserts a constructor and a static merge helper, but keeps the data layout.
+            // Resolve these explicitly or the old aq/cp pipeline stops at lq/mp and all
+            // history/anti-recall hooks silently install against the wrong generation.
+            case "lq": return "pq";
+            case "mp": return "rp";
+            case "td1": return "zg1";
+            case "ew": return "jw";
+            case "gw": return "lw";
+            case "pt": return "tt";
+            case "yx0": return "lz0";
+            case "fh": return "jh";
+            case "xl7": return "ct7";
+            case "uo5": return "ou5";
+            case "co5": return "wt5";
+            case "u68": return "ef8";
+            case "ca1": return "wc1";
+            case "le2": return "zh2";
+            case "oc1": return "sf1";
+            case "v45": return "na5";
+            case "vv5": return "p16";
+            case "tr2": return "iv2";
+            case "ts4": return "ey4";
+            case "kt4": return "vy4";
+            case "yq8": return "nz8";
+            case "ur2": return "jv2";
+            case "ct2": return "rw2";
+            case "et2": return "tw2";
+            case "wi8": return "hr8";
+            case "r48": return "ad8";
+            case "k48": return "tc8";
+            case "b48": return "kc8";
+            case "yz7": return "k88";
+            case "gd4": return "qi4";
+            case "bg4": return "ll4";
+            // kotlinx.serialization JsonElement. code249's qe4 name is reused by
+            // Kotlin Intrinsics in code257 and has no Companion/serializer. The
+            // JSON patch payload type consumed by jo0/lw is ak4 on this exact host.
+            case "qe4": return "ak4";
+            case "aw9": return "y4a";
+            case "hd6": return "kj6";
+            case "h48": return "qc8";
+            case "k77": return "ke7";
+            case "c3a": return "aca";
+            // Login entry state/options were re-obfuscated together in code257.  Keep these
+            // translations in the exact 2.4.1 table: code249 still uses v45/i45.
+            case "i45": return "y95";
+            // Password-login ViewModel and its reducer events.  The logical keys below are the
+            // reviewed code249 symbols used by Main's candidate-account adapter.
+            case "ge6": return "jk6";
+            case "ae6": return "dk6";
+            case "be6": return "ek6";
+            case "ce6": return "fk6";
+            case "qv9": return "o4a";
+            // AccountManager changed its live user model from tw to ax in code257.
+            case "tw": return "ax";
+            case "w04": return "c64";
+            case "m52": return "u82";
+            case "y23": return "b73";
+            case "j42": return "s72";
+            // i42 is the Continuation interface; wh2 is only one implementation in code257.
+            // Reflection signatures must use the interface itself (r72).
+            case "i42": return "r72";
+            case "c52": return "l82";
+            case "sx8": return "o69";
+            case "yx8": return "u69";
+            case "jx8": return "b69";
+            case "ei8": return "oq8";
+            case "v6a": return "ufa";
+            // code257 history stream parser: zs7.a(boolean, ut9, r72).
+            case "zj9": return "ut9";
+            case "gl1": return "po1";
+            case "me2": return "ai2";
+            case "jx7": return "w58";
+            case "wp": return "aq";
+            case "n51": return "g71";
+            case "dz1": return "p22";
+            case "wc5": return "fd5";
+            case "zm7": return "yu7";
+            case "rg3": return "il3";
+            case "gh3": return "xl3";
+            case "pv1": return "zy1";
+            case "wh8": return "gq8";
+            case "mu8": return "d39";
+            case "pp5": return "jv5";
+            case "lw7": return "y48";
+            case "pc5": return "bf5";
+            case "nx0": return "az0";
+            // Kotlin runBlocking: rc5.c0 in code249 -> kx9.P in code257.
+            // The signature remains (CoroutineContext, Function2) -> Object.
+            case "rc5": return "kx9";
+            default: return name236;
+        }
+    }
+
+    /**
+     * DeepSeek 2.5.2/code273 (mainland) symbols, keyed by the exact string that reaches
+     * this function after name230 -> name234 -> name236 -> name241 have run.
+     * Two independent, R8-proof signals were used to build this table:
+     *   1) kotlinx-serialization wire anchors (field-name strings never renamed), and
+     *   2) per-class string-literal fingerprints (R8 keeps string constants), cross-checked
+     *      against the reference graph (a class is accepted only if its renamed neighbours
+     *      also line up). Entries are the union of the authoritative 198 DTO mappings and the
+     *    hand-verified behavioural-class mappings that closed the name241 remainder.
+     */
+    private static String name252(String name241) {
+        if (name241 == null) return null;
+        switch (name241) {
+            case "a78": return "wn8";
+            case "a79": return "it9";
+            case "aca": return "mva";
+            case "ad8": return "au8";
+            case "ag3": return "aq3";
+            case "an7": return "x28";
+            case "ao5": return "az5";
+            case "ao7": return "x38";
+            case "ap1": return "cw1";
+            case "at3": return "l34";
+            case "av0": return "h01";
+            case "ay7": return "ve8";
+            case "az0": return "w11";
+            case "b00": return "i10";
+            case "b69": return "ws9";
+            case "b73": return "bf3";
+            case "b8": return "y7";
+            case "bb7": return "jo7";
+            case "bu5": return "f56";
+            case "bw7": return "uc8";
+            case "by1": return "u52";
+            case "c64": return "ah4";
+            case "c80": return "eb0";
+            case "ca2": return "rh2";
+            case "ch1": return "do1";
+            case "ci3": return "as3";
+            case "ci9": return "d5a";
+            case "cn5": return "cy5";
+            case "cr3": return "n14";
+            case "ct1": return "l02";
+            case "ct7": return "d98";
+            case "cu5": return "g56";
+            case "cv": return "hw";
+            case "cz2": return "g73";
+            case "dd0": return "zg0";
+            case "dd8": return "du8";
+            case "dp1": return "ow1";
+            case "dx": return "jy";
+            case "dy7": return "ye8";
+            case "dz0": return "h41";
+            case "e00": return "l10";
+            case "ea": return "ga";
+            case "eb7": return "mo7";
+            case "ed1": return "mj1";
+            case "ef8": return "fw8";
+            case "eo7": return "b48";
+            case "eu1": return "a22";
+            case "ev0": return "l01";
+            case "ey0": return "k31";
+            case "f27": return "pf7";
+            case "f67": return "lj7";
+            case "f90": return "jc0";
+            case "fa2": return "uh2";
+            case "fd5": return "i95";
+            case "fi3": return "ds3";
+            case "fn7": return "c38";
+            case "ft4": return "h45";
+            case "fz2": return "j73";
+            case "g71": return "oc1";
+            case "g86": return "ek6";
+            case "gc8": return "gt8";
+            case "gd8": return "gu8";
+            case "gn7": return "d38";
+            case "gp1": return "rw1";
+            case "gr3": return "r14";
+            case "gy7": return "bf8";
+            case "gz7": return "cg8";
+            case "ha7": return "pn7";
+            case "hc0": return "dg0";
+            case "hd1": return "pj1";
+            case "hg9": return "h3a";
+            case "hr8": return "z99";
+            case "hw0": return "n11";
+            case "hx0": return "q11";
+            case "i67": return "oj7";
+            case "i89": return "ru9";
+            case "ib4": return "jm4";
+            case "iu7": return "sa8";
+            case "iv0": return "p01";
+            case "iw0": return "s01";
+            case "j86": return "hk6";
+            case "jd8": return "ku8";
+            case "jh": return "jh";
+            case "jh1": return "ko1";
+            case "jk6": return "mw6";
+            case "jl1": return "ks1";
+            case "jn7": return "g38";
+            case "jt7": return "q98";
+            case "jv2": return "j33";
+            case "jv5": return "z66";
+            case "jw": return "nx";
+            case "jy7": return "ef8";
+            case "jz7": return "fg8";
+            case "k88": return "hp8";
+            case "k92": return "zg2";
+            case "kc8": return "kt8";
+            case "ke7": return "tr7";
+            case "ki9": return "l5a";
+            case "kj6": return "nv6";
+            case "ks5": return "m36";
+            case "ku0": return "oz0";
+            case "kx9": return "jg2";
+            case "l89": return "uu9";
+            case "ll4": return "ow4";
+            case "ln5": return "ly5";
+            case "lr3": return "w14";
+            case "lw": return "px";
+            case "lz0": return "p41";
+            case "m86": return "kk6";
+            case "md8": return "nu8";
+            case "me6": return "jq6";
+            case "mp1": return "xw1";
+            case "ms7": return "n88";
+            case "mt7": return "t98";
+            case "my7": return "if8";
+            case "n84": return "oj4";
+            case "n92": return "ch2";
+            case "nc8": return "nt8";
+            case "ni9": return "o5a";
+            case "nl1": return "os1";
+            case "np1": return "yw1";
+            case "ns5": return "p36";
+            case "nu0": return "rz0";
+            case "nu5": return "r56";
+            case "nu7": return "xa8";
+            case "nw0": return "t11";
+            case "nw3": return "b74";
+            case "nz8": return "yl9";
+            case "o4a": return "qga";
+            case "o67": return "uj7";
+            case "o69": return "ws9";
+            case "o89": return "xu9";
+            case "of4": return "sq4";
+            case "oi9": return "p5a";
+            case "on5": return "oy5";
+            case "on7": return "l38";
+            case "oq8": return "w77";
+            case "ot1": return "k12";
+            case "ou5": return "m66";
+            case "p16": return "ld6";
+            case "p49": return "xq9";
+            case "p86": return "nk6";
+            case "p95": return "nl5";
+            case "pa8": return "or8";
+            case "pm9": return "n9a";
+            case "pn7": return "m38";
+            case "pq": return "wr";
+            case "ps7": return "q88";
+            case "py7": return "lf8";
+            case "q84": return "rj4";
+            case "q92": return "fh2";
+            case "qc8": return "qt8";
+            case "qg9": return "q3a";
+            case "qi4": return "ut4";
+            case "ql1": return "rs1";
+            case "qo5": return "qz5";
+            case "qp1": return "bx1";
+            case "qu0": return "uz0";
+            case "qv0": return "x01";
+            case "qw3": return "e74";
+            case "r39": return "zp9";
+            case "r89": return "av9";
+            case "rp": return "vq";
+            case "rw2": return "q43";
+            case "s49": return "ar9";
+            case "s69": return "at9";
+            case "s86": return "qk6";
+            case "sc6": return "po6";
+            case "sm7": return "p28";
+            case "sp5": return "u06";
+            case "ss7": return "t88";
+            case "sy7": return "of8";
+            case "t84": return "uj4";
+            case "tc0": return "pg0";
+            case "tc8": return "tt8";
+            case "tg9": return "t3a";
+            case "tl1": return "us1";
+            case "tm1": return "vt1";
+            case "tn7": return "q38";
+            case "to1": return "wv1";
+            case "to5": return "tz5";
+            case "tt": return "zu";
+            case "tw0": return "z11";
+            case "tw2": return "s43";
+            case "tx7": return "pe8";
+            case "u41": return "w91";
+            case "u67": return "ak7";
+            case "u69": return "ft1";
+            case "u70": return "wa0";
+            case "uh1": return "wo1";
+            case "ut9": return "sea";
+            case "ux0": return "b31";
+            case "v49": return "dr9";
+            case "v86": return "uk6";
+            case "va7": return "do7";
+            case "vc6": return "so6";
+            case "vp5": return "x06";
+            case "w18": return "ti8";
+            case "w84": return "xj4";
+            case "w92": return "lh2";
+            case "wc1": return "ej1";
+            case "wg9": return "w3a";
+            case "wh3": return "ur3";
+            case "wl1": return "xs1";
+            case "ws7": return "x88";
+            case "wt5": return "a56";
+            case "wv3": return "k64";
+            case "ww3": return "k74";
+            case "wx7": return "se8";
+            case "wy0": return "a41";
+            case "x70": return "za0";
+            case "x95": return "tl5";
+            case "xc8": return "xt8";
+            case "xo1": return "zv1";
+            case "xs3": return "i34";
+            case "xu0": return "e01";
+            case "y4a": return "qra";
+            case "ya7": return "go7";
+            case "yc0": return "ug0";
+            case "yc6": return "vo6";
+            case "yz": return "f10";
+            case "z49": return "hr9";
+            case "z84": return "ak4";
+            case "z92": return "oh2";
+            case "zc1": return "hj1";
+            case "zg1": return "ao1";
+            case "zg9": return "z3a";
+            case "zh2": return "np2";
+            case "zh3": return "xr3";
+            case "zi4": return "du4";
+            case "zw3": return "n74";
+            case "zx0": return "f31";
+            case "zy1": return "t62";
+            default: return name241;
+        }
+    }
+
+    /**
+     * DeepSeek 2.5.3/code275 (mainland) symbols, keyed by the exact 2.4.1 name that reaches this
+     * function after name230 -> name234 -> name236 -> name241 have run. This is a fresh R8 pass
+     * after 2.5.2, so it is derived directly from the 2.4.1 baseline (NOT from name252): every
+     * entry below was located in the code275 APK by a structural/string fingerprint that has a
+     * full-library unique match (see 映射表/name253_symbols.json for the per-symbol evidence).
+     */
+    private static String name253(String name241) {
+        if (name241 == null) return null;
+        switch (name241) {
+            // ---- chat request / pipeline ----
+            case "az0": return "zh1";   // ChatFullCompletionRequest (2.4.1 az0 -> 2.5.3 zh1;
+                                        // verified unique: implements pe1 + 11-arg ctor
+                                        // (String,Integer,String,ArrayList,bool,bool,String,bool,String,String,int))
+            // ---- UI / settings surface (settings entry + appearance) ----
+            case "fd5": return "i9b";   // settings render root (fd5.c/13 -> i9b.s/7, 4x d39.d)
+            case "yu7": return "d39";   // settings component factory (SettingSectionTitle anchor)
+            case "gq8": return "b2a";   // text (18-arg, first param String)
+            case "il3": return "wd4";   // click interface (u() -> w())
+            case "xl3": return "me4";   // content interface (r(O,O) -> r(O,O))
+            case "zy1": return "cl2";   // composer wrapper (Object,boolean,int)
+            case "mv5": return "ot6";   // Modifier interface (241 mv5 -> 253 ot6, both are the interface)
+            case "jv5": return "lt6";   // Modifier.INSTANCE singleton (241 jv5 -> 253 lt6,
+                                        // toString "Modifier"; NOT the ot6 interface)
+            case "r12": return "jh4";   // composer
+            case "bu9": return "s6b";   // background (new cb0/mg0(j,null,x,2))
+            case "y48": return "ed9";   // height (new x48/dd9(..,f,..,f,true,5))
+            case "bf5": return "x29";   // spacer (r12,mv5 -> jh4,ot6)
+            case "jg7": return "ck8";   // rounded corner
+            case "h19": return "aj7";   // settings-row icon container (fields A-J + a-z, matches 241 h19)
+            case "d39": return "via";   // Kotlin Unit (toString "kotlin.Unit"); NOT the same d39 as
+                                        // code275's settings factory above (names swapped by R8)
+            // ---- session / message model ----
+            case "rb8": return "zj9";   // MutableState (_state$volatile + f + int e)
+            case "rp":  return "ar";    // message base (UUID d + zj9 b/c)
+            case "jw":  return "rx";    // message A (int g/Integer h/String i/double j)
+            case "lw":  return "tx";    // message B (fields head + tx(rx) copy ctor)
+            case "pq":  return "bs";    // session message list (fields a-m identical)
+            case "tt":  return "dv";    // api endpoint (Uri.parse("/api"+b))
+            case "zg1": return "e22";   // ChatSessionComponent ("ChatSessionComponent")
+            // ---- account / login ----
+            case "ax":  return "ky";    // AccountManager user model (fields a-n)
+            case "b73": return "cx3";   // BizCode ("FileForkFileTaskBizCode")
+            case "jk6": return "vj7";   // password-login VM (3x c0(1,new W(this,0/1/2)))
+            case "wc1": return "kx1";   // login component (fields f-i + App.b + 10,SECONDS)
+            case "fk6": return "qj7";   // login event interface (empty interface)
+            case "o4a": return "pmb";   // huge component (15 interfaces + "BeforeReceive")
+            case "dk6": return "oj7";   // login event A (String a + String ctor)
+            case "ek6": return "pj7";   // login event B (String a + String ctor)
+            case "y95": return "s66";   // login entry enum (exactly 6 Object fields a-f)
+            case "na5": return "h76";   // login options (fields a-h + 8-arg ctor)
+            case "c64": return "c15";   // context container (21 fields a-u)
+            case "sf1": return "q02";   // session-component lambda (int a + e22 b)
+            // ---- serialization / DTO ----
+            case "ak4": return "wf5";   // JsonElement ("kotlinx.serialization.json.JsonElement")
+            case "aq":  return "mr";    // DTO (Companion + bv5[] s + fields a-r)
+            case "b69": return "hma";   // @Metadata DTO (int a/Integer b/String c...)
+            case "o69": return "uma";   // @Metadata DTO (String a,b,c/Integer d,e...)
+            case "u69": return "ana";   // Room database (Database a + ConcurrentHashMap b)
+            case "w58": return "ce9";   // persistent list (extends o1 + Object[] a)
+            case "kj6": return "si7";   // Parcelable (CREATOR + gg9.j()/new X(1L,obj))
+            // ---- coroutine ----
+            case "r72": return "tt2";   // Continuation (void g(Object) + nu2 q())
+            case "l82": return "nu2";   // Job/CoroutineContext (4 methods)
+            // ---- misc / string-anchored ----
+            case "op5": return "zm6";   // network error ("MessageTipListSerializer")
+            case "zs0": return "zb1";   // result wrapper (instanceof-unwrap static a)
+            case "zh2": return "k53";   // "GuestPow"
+            case "jv2": return "xj3";   // {Closed,Open} enum (fields a/b/c)
+            case "nz8": return "gfa";   // list-merge util (AbstractCollection, me4)
+            case "ey7": return "l69";   // ShareCreateResponseBizData serializer
+            case "ew0": return "ff1";   // session panel VM ("key_client_update_show_key")
+            case "j5":  return "m5";    // user-info VM ("key_user_info")
+            case "iu7": return "f29";   // SetBirthdayBizCode (Companion e29 / serializer d29)
+            // The 2.4.1 method-name tables (session merge/replace, chat VM A->B offset) do NOT
+            // hold on code275: ChatSessionComponent methods are re-obfuscated non-arithmetically
+            // (e.g. G->U, H->V, I->W, J->X, L->Z; see chatsession_component_methods in the
+            // symbol map). Those are handled by the method-name helpers below, not by this switch.
+            default: return name241;
+        }
+    }
+
+    private static String name230(String legacyName) {
+        switch (legacyName) {
+            // Settings and heartbeat rendering.
+            case "u25": return "t55";
+            case "fo2": return "lq2";
+            case "ho2": return "nq2";
+            case "at7": return "aw7";
+            case "ht7": return "hw7";
+            case "h78": return "ja8";
+            case "i68": return "j98";
+            case "yg8": return "ji8";
+
+            // Completion transport and coroutines.
+            case "ew0": return "qw0";
+            case "rs0": return "ct0";
+            case "s92": return "ac2";
+            case "r92": return "zb2";
+            case "b41": return "y41";
+            case "q03": return "x23";
+            case "q71": return "n81";
+            case "w02": return "e32";
+            case "ui8": return "vl8";
+            case "n02": return "v22";
+            case "uz1": return "c22";
+            case "vz1": return "d22";
+            case "mb3": return "xd3";
+            case "xa3": return "id3";
+            case "ib3": return "td3";
+            case "u82": return "dq1";
+            case "c74": return "r94";
+            case "fx6": return "zz6";
+
+            // Chat/session/message.
+            case "tp": return "aq";
+            case "uo": return "cp";
+            case "uo7": return "sr7";
+            case "mv": return "vv";
+            case "kv": return "tv";
+            case "vv7": return "uy7";
+            case "lv7": return "ky7";
+            case "h83": return "ta3";
+            case "za1": return "cc1";
+            case "na1": return "nb1";
+            case "bu0": return "mu0";
+            case "zs0": return "kt0";
+            case "au0": return "lu0";
+            case "at0": return "lt0";
+            case "op5": return "hs5";
+            case "kp5": return "ds5";
+            case "vx2": return "b03";
+            case "yg3": return "v99";
+            case "h61": return "g71";
+            case "fu0": return "ru0";
+            case "uu0": return "hv0";
+            case "h1": return "n1";
+            case "jm7": return "gp7";
+            case "rs7": return "rv7";
+            case "xs7": return "xv7";
+
+            // Safety, expert mode, login and serializers.
+            case "kb7": return "he7";
+            case "sf5": return "ni5";
+            case "gf5": return "bi5";
+            case "y91": return "xa1";
+            case "cy4": return "t05";
+            case "px4": return "h05";
+            case "x94": return "mc4";
+            case "hv": return "qv";
+            case "ch4": return "rj4";
+            case "m84": return "bb4";
+
+            // History, repository and navigation.
+            case "gm8": return "hp8";
+            case "pw0": return "bx0";
+            case "am8": return "bp8";
+            case "sl8": return "so8";
+            case "ed0": return "fh";
+            case "p68": return "q98";
+            case "aw": return "m17";
+            case "ve1": return "wg1";
+            case "ie": return "pe";
+            case "sb1": return "vc1";
+            case "rm5": return "mp5";
+            case "gf8": return "ii8";
+            case "mc": return "tc";
+
+            // Sidebar/Compose primitives.
+            case "mq5": return "gt5";
+            case "bn2": return "hp2";
+            case "n51": return "k61";
+            case "cn2": return "ip2";
+            case "zm2": return "fp2";
+            case "y31": return "v41";
+            case "qg5": return "lj5";
+            case "lw5": return "fz5";
+            case "bm4": return "qo4";
+            case "fe7": return "ch7";
+            case "sm4": return "hp4";
+            case "ce": return "je";
+            case "c46": return "w66";
+            case "gn9": return "yt9";
+
+            // File/image bridge.
+            case "us": return "dt";
+            case "pv0": return "cw0";
+            case "k31": return "h41";
+            case "wu1": return "bx1";
+            case "fp": return "mp";
+            case "ky2": return "r03";
+            case "yu0": return "lv0";
+            case "ty0": return "mz0";
+            case "su3": return "cx3";
+            case "a60": return "m60";
+            case "u40": return "e50";
+            case "xv0": return "kw0";
+            case "jv0": return "xv0";
+            case "zv0": return "mw0";
+
+            // Native history endpoint/session maintenance.
+            case "lj9": return "vm9";
+            case "pl9": return "ml9";
+            case "i91": return "fa1";
+            case "jb1": return "mc1";
+            default: return legacyName;
+        }
+    }
+
+    /** 2.3.4 re-obfuscated both store channels independently. */
+    private static String name234(String name230) {
+        if (name230 == null) return null;
+        if (googlePlay) {
+            switch (name230) {
+                case "qw0": return "gz0";
+                case "ct0": return "tv0";
+                case "aq": return "pq";
+                case "cp": return "qp";
+                case "vv": return "kw";
+                case "tv": return "iw";
+                case "he7": return "lp7";
+                case "ni5": return "bq5";
+                case "bi5": return "jp5";
+                case "ky7": return "oa8";
+                case "n81": return "mb1";
+                case "zb2": return "ag2";
+                case "y41": return "x71";
+                // x71 is the 2.3.4 GP Flow wrapper; its collector is a83. za5 has the same
+                // erased two-argument shape but belongs to an unrelated coroutine contract.
+                case "x23": return "a83";
+                case "xa1": return "zd1";
+                case "t05": return "b75";
+                case "h05": return "o65";
+                case "cc1": return "ef1";
+                case "fh": return "ih";
+                case "mp5": return "fx5";
+                case "hp2": return "kt2";
+                case "k61": return "j91";
+                case "tc": return "ika";
+                case "gt5": return "vu8";
+                case "fp2": return "it2";
+                case "v41": return "u71";
+                case "id3": return "mi3";
+                case "lj5": return "zq5";
+                case "fz5": return "e76";
+                case "qo4": return "ru4";
+                case "hp4": return "iv4";
+                case "ii8": return "uu8";
+                case "ip2": return "lt2";
+                case "lq2": return "tu2";
+                case "nq2": return "vu2";
+                case "ja8": return "pm8";
+                case "j98": return "ql8";
+                case "hw7": return "k88";
+                case "aw7": return "d88";
+                case "hv0": return "xx0";
+                case "rv7": return "u78";
+                case "sr7": return "n38";
+                case "r94": return "af4";
+                case "mc4": return "zh4";
+                case "vm9": return "c0a";
+                case "vl8": return "hy8";
+                case "w66": return "we6";
+                case "xv0": return "ny0";
+                case "xv7": return "a88";
+                case "zz6": return "la7";
+                case "yt9": return "h7a";
+                case "dt": return "tt";
+                case "cx3": return "r24";
+                case "e32": return "z62";
+                case "b03": return "w43";
+                case "kw0": return "az0";
+                case "lv0": return "by0";
+                case "mw0": return "cz0";
+                case "qv": return "fw";
+                case "rj4": return "ip4";
+                case "td3": return "xi3";
+                case "xd3": return "bj3";
+                case "d22": return "w52";
+                case "c22": return "v52";
+                case "v22": return "p62";
+                case "uy7": return "ya8";
+                case "wg1": return "ak1";
+                case "pe": return "se";
+                case "vc1": return "yf1";
+                case "bx0": return "rz0";
+                case "bp8": return "s19";
+                case "hp8": return "y19";
+                case "so8": return "j19";
+                case "q98": return "sd7";
+                // WCDB chat-session directory DAO.  an9 is an unrelated multi-purpose R8
+                // class; using it made the local-conversation cloud-prune guard install x0.
+                case "m17": return "g2a";
+                case "ml9": return "u4a";
+                case "fa1": return "rm1";
+                case "dq1": return "lw8";
+                case "e50": return "c60";
+                case "cw0": return "sy0";
+                // Native attachment composer. Its upload entry is
+                // d71.u(r02,String) on the 2.3.4 Google Play host.
+                case "h41": return "d71";
+                // Native composer upload metadata. 2.3.4 reuses bx1 for an unrelated Compose
+                // runtime exception, so carrying the 2.3.0 name forward resolves the wrong type.
+                case "bx1": return "r02";
+                case "ac2": return "bg2";
+                // Kotlin immutable empty-list singleton. Do not confuse this with the unrelated
+                // 2.3.4 GP coroutine class that also happens to be named gp7.
+                case "gp7": return "y08";
+                default: return name230;
+            }
+        }
+        switch (name230) {
+            case "qw0": return "nx0";
+            case "ct0": return "gg7";
+            case "aq": return "lq";
+            case "cp": return "mp";
+            case "vv": return "gw";
+            case "tv": return "ew";
+            case "he7": return "ql7";
+            case "ni5": return "no5";
+            case "bi5": return "vn5";
+            case "ky7": return "o68";
+            case "n81": return "t91";
+            case "zb2": return "ce2";
+            case "y41": return "e61";
+            case "x23": return "v53";
+            case "xa1": return "fc1";
+            case "t05": return "n45";
+            case "h05": return "a45";
+            case "cc1": return "kd1";
+            case "fh": return "fh";
+            case "mp5": return "ov5";
+            case "hp2": return "lr2";
+            case "k61": return "q71";
+            case "tc": return "sc";
+            case "gt5": return "gv7";
+            case "fp2": return "jr2";
+            case "v41": return "b61";
+            case "id3": return "ig3";
+            case "lj5": return "lp5";
+            case "fz5": return "i56";
+            case "qo4": return "ks4";
+            case "hp4": return "bt4";
+            case "ii8": return "rq8";
+            case "ip2": return "mr2";
+            case "lq2": return "us2";
+            case "nq2": return "ws2";
+            case "ja8": return "qi8";
+            case "j98": return "qh8";
+            case "hw7": return "l48";
+            case "aw7": return "e48";
+            case "hv0": return "ew0";
+            case "rv7": return "v38";
+            case "sr7": return "sz7";
+            case "r94": return "wc4";
+            case "mc4": return "sf4";
+            case "vm9": return "uv9";
+            case "vl8": return "fu8";
+            case "w66": return "ad6";
+            case "xv0": return "uw0";
+            case "xv7": return "b48";
+            case "zz6": return "c77";
+            case "yt9": return "v2a";
+            case "dt": return "pt";
+            case "cx3": return "n04";
+            case "e32": return "e52";
+            case "b03": return "r23";
+            case "kw0": return "hx0";
+            case "lv0": return "iw0";
+            case "mw0": return "jx0";
+            case "qv": return "bw";
+            case "rj4": return "an4";
+            case "td3": return "tg3";
+            case "xd3": return "xg3";
+            case "d22": return "b42";
+            // Kotlin Continuation. a75 is an unrelated callback in the mainland 2.3.4 APK;
+            // mapping uz1 to it breaks the editor's WCDB message hydrator at runtime.
+            case "c22": return "a42";
+            case "v22": return "u42";
+            case "uy7": return "y68";
+            case "wg1": return "gi1";
+            case "pe": return "pe";
+            case "vc1": return "ee1";
+            case "bx0": return "yx0";
+            case "bp8": return "mx8";
+            case "hp8": return "sx8";
+            case "so8": return "dx8";
+            case "q98": return "yh8";
+            // WCDB chat-session directory DAO.  zc is an unrelated multi-purpose R8 class.
+            case "m17": return "p6a";
+            case "ml9": return "tj9";
+            case "fa1": return "xk1";
+            case "dq1": return "tn4";
+            case "e50": return "u50";
+            case "cw0": return "zw0";
+            // Native attachment composer. Carrying h41 forward resolves an unrelated
+            // coroutine and makes every Local API image fail before upload.
+            case "h41": return "k51";
+            // Native composer upload metadata; bx1 is a Compose exception in mainland 2.3.4.
+            case "bx1": return "vy1";
+            case "ac2": return "de2";
+            case "gp7": return "dx7";
+            default: return name230;
+        }
+    }
+
+    /** Mainland 2.3.6 (code 249) re-obfuscated the 2.3.4 application classes again. */
+    private static String name236(String name234) {
+        if (name234 == null) return null;
+        switch (name234) {
+            case "ql7": return "xl7";
+            case "no5": return "uo5";
+            case "vn5": return "co5";
+            case "o68": return "u68";
+            case "t91": return "ca1";
+            case "ce2": return "le2";
+            case "e61": return "h61";
+            case "v53": return "c63";
+            case "fc1": return "oc1";
+            case "n45": return "v45";
+            case "a45": return "i45";
+            case "kd1": return "td1";
+            case "ov5": return "vv5";
+            case "lr2": return "tr2";
+            // The session-list composables stayed in sc for code249. fh0 is an unrelated
+            // runtime helper there; mapping to it made navigation and multi-select hook zero
+            // methods even though the class itself existed.
+            case "sc": return "sc";
+            case "gv7": return "zq8";
+            case "ks4": return "ts4";
+            case "bt4": return "kt4";
+            case "rq8": return "yq8";
+            case "mr2": return "ur2";
+            case "us2": return "ct2";
+            case "ws2": return "et2";
+            case "qi8": return "wi8";
+            case "qh8": return "wh8";
+            case "l48": return "r48";
+            case "e48": return "k48";
+            case "v38": return "b48";
+            // Empty Compose marker implemented by the multi-purpose c3a runtime singleton.
+            // The unrelated 2.3.4 Flow class also named e61 is translated to h61 above.
+            case "b61": return "e61";
+            case "sz7": return "yz7";
+            case "wc4": return "gd4";
+            case "sf4": return "bg4";
+            case "ge4": return "qe4";
+            // pv0/zw0 fork-file coroutine. Discriminator 2 in b70 is the ForkFileRequest leg.
+            case "m60": return "b70";
+            case "uv9": return "aw9";
+            case "fu8": return "mu8";
+            case "ad6": return "hd6";
+            case "b48": return "h48";
+            case "c77": return "k77";
+            case "v2a": return "c3a";
+            case "n04": return "w04";
+            case "e52": return "m52";
+            case "r23": return "y23";
+            case "tg3": return "ch3";
+            case "ig3": return "rg3";
+            case "xg3": return "gh3";
+            case "b42": return "j42";
+            case "a42": return "i42";
+            case "u42": return "c52";
+            case "ee1": return "ed1";
+            case "mx8": return "sx8";
+            case "sx8": return "yx8";
+            case "dx8": return "jx8";
+            case "yh8": return "ei8";
+            case "p6a": return "v6a";
+            case "tj9": return "zj9";
+            case "xk1": return "gl1";
+            case "tn4": return "rc5";
+            case "de2": return "me2";
+            case "dx7": return "jx7";
+            // Network Result.Success and uploaded FileInfo were both re-obfuscated in
+            // code249. Without these two mappings the file fork succeeds on the server but
+            // the module discards the returned Vision credential as an unknown wrapper.
+            case "ds5": return "oy5";
+            case "mp": return "wp";
+            // code249 re-obfuscated the 2.3.4 mainland attachment composer.
+            case "k51": return "n51";
+            // Native image/file picker metadata. 2.3.4 CN calls this vy1, while code249's
+            // composer n51.u accepts dz1. Leaving the old name here made Agent screenshots save
+            // successfully but fail before DeepSeek's real uploader was invoked.
+            case "vy1": return "dz1";
+            default: return name234;
+        }
+    }
+
+    static String method(String legacyOwner, String legacyMethod) {
+        if (legacyOwner == null || legacyMethod == null) return legacyMethod;
+        if (v253 && ("fo2".equals(legacyOwner) || "ho2".equals(legacyOwner))) {
+            // 2.5.3's live fragments renamed the JSON-patch helpers: append g -> c, replace i -> h.
+            if ("g".equals(legacyMethod)) return "c";
+            if ("i".equals(legacyMethod)) return "h";
+        }
+        if (v241 && "ed0".equals(legacyOwner) && "h".equals(legacyMethod)) {
+            return "o";
+        }
+        if (v241 && "u82".equals(legacyOwner) && "K".equals(legacyMethod)) {
+            return "P";
+        }
+        String mapped = v230 ? method230(legacyOwner, legacyMethod) : legacyMethod;
+        if (!v234) return mapped;
+        // Kotlin runBlocking moved from f0 to rc5.c0 in mainland code249.
+        if (v236 && "u82".equals(legacyOwner) && "K".equals(legacyMethod)) {
+            return "c0";
+        }
+        if (v236 && "mc".equals(legacyOwner) && "e".equals(legacyMethod)) {
+            return "k";
+        }
+        if (v236 && "mc".equals(legacyOwner) && "f".equals(legacyMethod)) {
+            return "l";
+        }
+        if ("mc".equals(legacyOwner) && "e".equals(legacyMethod)) {
+            return googlePlay ? "b" : "d";
+        }
+        if ("mc".equals(legacyOwner) && "f".equals(legacyMethod)) {
+            return googlePlay ? "c" : "e";
+        }
+        if ("mq5".equals(legacyOwner) && "i".equals(legacyMethod)) {
+            return googlePlay ? "m" : "k";
+        }
+        if ("qg5".equals(legacyOwner) && "w".equals(legacyMethod)) {
+            return googlePlay ? "t" : "u";
+        }
+        if ("bm4".equals(legacyOwner) && "w".equals(legacyMethod)) {
+            return googlePlay ? "v" : "u";
+        }
+        if ("p68".equals(legacyOwner) && "a".equals(legacyMethod)) {
+            // 2.3.4 uses a synthetic WCDB Transaction: sd7.d on GP, yh8.b on CN.
+            return googlePlay ? "d" : "b";
+        }
+        if ("aw".equals(legacyOwner) && "a".equals(legacyMethod)) {
+            // Static directory reader: g2a.s on GP, p6a.h on CN.
+            return googlePlay ? "s" : "h";
+        }
+        // The Play 2.3.4 live-message class inserted one method before the JSON patch helper.
+        if (googlePlay && "mv".equals(legacyOwner) && "i".equals(mapped)) return "j";
+        return mapped;
+    }
+
+    private static String method230(String legacyOwner, String legacyMethod) {
+        if ("u25".equals(legacyOwner) && "i".equals(legacyMethod)) return "l";
+        if (("fo2".equals(legacyOwner) || "ho2".equals(legacyOwner))
+                && "g".equals(legacyMethod)) return "e";
+        if ("yg8".equals(legacyOwner) && "b".equals(legacyMethod)) return "e";
+        if ("mc".equals(legacyOwner)) {
+            if ("e".equals(legacyMethod)) return "b";
+            if ("f".equals(legacyMethod)) return "c";
+        }
+        if ("mq5".equals(legacyOwner) && "i".equals(legacyMethod)) return "l";
+        if ("qg5".equals(legacyOwner) && "w".equals(legacyMethod)) return "s";
+        if ("bm4".equals(legacyOwner)) {
+            if ("i".equals(legacyMethod)) return "h";
+            if ("k".equals(legacyMethod)) return "j";
+            if ("t".equals(legacyMethod)) return "q";
+            if ("w".equals(legacyMethod)) return "t";
+        }
+        if ("p68".equals(legacyOwner) && "a".equals(legacyMethod)) return "d";
+        if ("aw".equals(legacyOwner) && "a".equals(legacyMethod)) return "g";
+        if ("ed0".equals(legacyOwner) && "h".equals(legacyMethod)) return "n";
+        if ("i91".equals(legacyOwner)) {
+            if ("a".equals(legacyMethod)) return "c";
+            if ("b".equals(legacyMethod)) return "e";
+            if ("c".equals(legacyMethod)) return "f";
+        }
+        if ("u82".equals(legacyOwner)) {
+            if ("K".equals(legacyMethod)) return "f0";
+            if ("P".equals(legacyMethod)) return "p0";
+        }
+        if ("mv".equals(legacyOwner) || "uo".equals(legacyOwner)) {
+            return messageMethod(legacyMethod);
+        }
+        return legacyMethod;
+    }
+
+    static String sessionMergeMethod() {
+        if (v241) return "y";
+        return v234 ? "x" : (v230 ? "u" : "u");
+    }
+
+    static String sessionReplaceMethod() {
+        if (v241) return "u";
+        return v234 ? "t" : "q";
+    }
+
+    static String sessionReplaceWithTextMethod() {
+        if (v241) return "t";
+        return v234 ? "s" : "p";
+    }
+
+    /** ChatSessionComponent methods shifted by one in code257 after a new action was inserted. */
+    static String chatViewModelMethod(String code249Name) {
+        if (code249Name == null) return null;
+        if (v253) {
+            // 2.5.3 re-obfuscated ChatSessionComponent (e22) method names non-arithmetically.
+            // Verified against method bodies / fields (see name253_symbols.json
+            // "chatsession_component_methods"): 2.4.1 H() -> e22.V(), N(xw0,vv0) -> c0(yf1,xe1),
+            // Q(...) send bridge -> f0(...,p1,...,boolean,int).
+            switch (code249Name) {
+                case "G": return "V";  // session getter (2.4.1 zg1.H() -> pq; 2.5.3 e22.V() -> bs)
+                case "M": return "c0"; // local-deletion outcome consumer (2.4.1 zg1.N)
+                case "N": return "c0"; // native proactive outcome (same 2.4.1 target "N")
+                case "P": return "f0"; // text-send bridge (2.4.1 zg1.Q)
+                default: return code249Name;
+            }
+        }
+        if (!v241 || code249Name == null) return code249Name;
+        switch (code249Name) {
+            case "A": return "B";
+            case "B": return "C";
+            case "C": return "D";
+            case "D": return "E";
+            case "E": return "F";
+            case "F": return "G";
+            case "G": return "H";
+            case "H": return "I";
+            case "I": return "J";
+            case "J": return "K";
+            case "K": return "L";
+            case "L": return "M";
+            case "M": return "N";
+            case "N": return "O";
+            case "O": return "P";
+            case "P": return "Q";
+            case "Q": return "R";
+            case "R": return "S";
+            case "S": return "T";
+            default: return code249Name;
+        }
+    }
+
+    /** Suspend endpoint used to create the hidden session owned by the local API. */
+    public static String localApiSessionCreateMethod() {
+        if (v241) return "w";
+        if (v234) return googlePlay ? "a" : "u";
+        return method("i91", "a");
+    }
+
+    /** Suspend endpoint used to delete one hidden local-API session. */
+    public static String localApiSessionDeleteMethod() {
+        if (v241) return "y";
+        if (v234) return googlePlay ? "c" : "w";
+        return method("i91", "c");
+    }
+
+    /** Request data class accepted by {@link #localApiSessionDeleteMethod()}. */
+    static String localApiSessionDeleteRequestClass() {
+        if (v241) return "jh1";
+        if (v234) return googlePlay ? "of1" : "ud1";
+        return name("jb1");
+    }
+
+    static String sessionMessageMapField() {
+        return "f";
+    }
+
+    /** Built-in settings analytics dispatcher for versions with a verified symbol table. */
+    static Method settingsEntryMethod(ClassLoader loader) {
+        // code273 reuses the code257 name "v2a" for an unrelated coroutine state machine, so the
+        // reviewed 2.4.1 probe would hook a random method and corrupt the settings surface. Keep
+        // this legacy path disabled on 2.5.2; the settings entry is handled by
+        // HookUiSurface.hookV252SettingsEntry instead.
+        if (v252) return null;
+        if (!v234) return null;
+        try {
+            Class<?> owner = Class.forName(v236 ? "c3a"
+                    : googlePlay ? "h7a" : "v2a", false, loader);
+            String expected = googlePlay ? "x" : "z";
+            for (Method method : owner.getDeclaredMethods()) {
+                Class<?>[] p = method.getParameterTypes();
+                if (expected.equals(method.getName())
+                        && p.length == 3
+                        && p[0] == String.class
+                        && p[1] == Boolean.class
+                        && p[2] == int.class) {
+                    method.setAccessible(true);
+                    return method;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /** Native "data used to improve experience" Compose control for every supported host. */
+    static Method trainingControlMethod(ClassLoader loader) {
+        String[][] candidates;
+        if (v241) {
+            candidates = new String[][]{{"k56", "l"}};
+        } else if (v236) {
+            candidates = new String[][]{{"no9", "k"}};
+        } else if (v234) {
+            candidates = googlePlay
+                    ? new String[][]{{"fe5", "z"}, {"ym9", "j"}}
+                    : new String[][]{{"ym9", "j"}, {"fe5", "z"}};
+        } else if (v230) {
+            candidates = googlePlay
+                    ? new String[][]{{"m12", "r"}, {"zj8", "l"}}
+                    : new String[][]{{"zj8", "l"}, {"m12", "r"}};
+        } else {
+            candidates = new String[][]{{"hf8", "Q"}};
+        }
+        for (String[] candidate : candidates) {
+            Method method = findStaticMethod(loader, candidate[0], candidate[1], 5);
+            if (method == null) continue;
+            Class<?>[] p = method.getParameterTypes();
+            if (p[0] == Boolean.class && p[4] == int.class) return method;
+        }
+        return null;
+    }
+
+    /** Root Compose renderer for the normal/forced client-update dialog. */
+    static Method updateDialogMethod(ClassLoader loader) {
+        String[][] candidates;
+        if (v241) {
+            candidates = new String[][]{{"s95", "h"}};
+        } else if (v236) {
+            candidates = new String[][]{{"ea5", "g"}};
+        } else if (v234) {
+            candidates = googlePlay
+                    ? new String[][]{{"ss6", "c"}, {"fa5", "i"}}
+                    : new String[][]{{"fa5", "i"}, {"ss6", "c"}};
+        } else if (v230) {
+            candidates = googlePlay
+                    ? new String[][]{{"bh6", "c"}, {"w85", "a"}}
+                    : new String[][]{{"w85", "a"}, {"bh6", "c"}};
+        } else {
+            candidates = new String[][]{{"o65", "h"}};
+        }
+        for (String[] candidate : candidates) {
+            Method method = findStaticMethod(loader, candidate[0], candidate[1], 2);
+            if (method == null) continue;
+            Class<?>[] p = method.getParameterTypes();
+            if (p[0] == int.class) return method;
+        }
+        return null;
+    }
+
+    private static Method findStaticMethod(ClassLoader loader, String owner, String name,
+                                           int parameterCount) {
+        try {
+            Class<?> type = Class.forName(owner, false, loader);
+            for (Method method : type.getDeclaredMethods()) {
+                if (name.equals(method.getName())
+                        && Modifier.isStatic(method.getModifiers())
+                        && method.getParameterCount() == parameterCount) {
+                    method.setAccessible(true);
+                    return method;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return null;
+    }
+
+    /** 2.3.0 inserted methods into the abstract chat-message contract. */
+    static String messageMethod(String legacyMethod) {
+        if (!v230 || legacyMethod == null) return legacyMethod;
+        switch (legacyMethod) {
+            case "A": return "C";
+            case "B": return "D";
+            case "C": return "E";
+            case "D": return "F";
+            case "E": return "G";
+            case "F": return "H";
+            case "G": return "I";
+            case "H": return "J";
+            case "I": return "K";
+            case "J": return "L";
+            case "K": return "M";
+            case "L": return "N";
+            case "N": return "O";
+            case "O": return "P";
+            case "P": return "Q";
+            case "Q": return "T";
+            case "R": return "U";
+            case "S": return "V";
+            case "g": return "e";
+            case "e": return "f";
+            case "f": return "g";
+            case "l": return "n";
+            case "m": return "q";
+            case "n": return "r";
+            case "q": return "s";
+            case "r": return "t";
+            case "s": return "u";
+            case "t": return "v";
+            case "u": return "w";
+            case "v": return "x";
+            case "w": return "y";
+            case "x": return "z";
+            case "y": return "A";
+            case "z": return "B";
+            default: return legacyMethod;
+        }
+    }
+
+    static Method publicMessageMethod(Object message, String legacyName,
+                                      Class<?>... parameterTypes)
+            throws NoSuchMethodException {
+        return message.getClass().getMethod(messageMethod(legacyName), parameterTypes);
+    }
+
+    static String instanceMethod(Object value, String legacyName) {
+        if (!v230 || value == null) return legacyName;
+        String simple = value.getClass().getSimpleName();
+        // 2.3.0 uses vv/tv; 2.3.4 re-obfuscates the same dynamic/static message
+        // implementations again (gw/ew on mainland, kw/iw on GP). Comparing only the 2.3.0
+        // names made cold-start response preservation call the wrong accessors on 2.3.4.
+        return ("vv".equals(simple) || "tv".equals(simple)
+                || name("mv").equals(simple) || name("kv").equals(simple))
+                ? messageMethod(legacyName) : legacyName;
+    }
+
+    static boolean simpleNameIs(Object value, String legacyName) {
+        return value != null && name(legacyName).equals(value.getClass().getSimpleName());
+    }
+
+    /**
+     * Static history messages gained one serialized field before message_id in 2.3.0.  The
+     * logical fields used by the module therefore shift by one from f..A.
+     */
+    static String staticMessageField(Object value, String legacyField) {
+        if (!v230 || value == null || legacyField == null
+                || (!"tv".equals(value.getClass().getSimpleName())
+                && !"vv".equals(value.getClass().getSimpleName())
+                && !name("mv").equals(value.getClass().getSimpleName())
+                && !name("kv").equals(value.getClass().getSimpleName()))) {
+            return legacyField;
+        }
+        if (legacyField.length() != 1) return legacyField;
+        char field = legacyField.charAt(0);
+        if (field >= 'f' && field < 'z') return String.valueOf((char) (field + 1));
+        if (field == 'z') return "A";
+        if (field == 'A') return "B";
+        return legacyField;
+    }
+}

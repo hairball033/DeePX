@@ -1,0 +1,4022 @@
+package com.smallhairball.deepx;
+
+import com.dsmod.relay.ExpertRelayGate;
+
+import android.app.Activity;
+import android.app.ActivityManager;
+import android.app.Dialog;
+import android.content.BroadcastReceiver;
+import android.content.ContentValues;
+import android.content.Context;
+import android.content.ContextWrapper;
+import android.content.res.Configuration;
+import android.content.pm.PackageInfo;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.PorterDuff;
+import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.Matrix;
+import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+import android.os.Parcel;
+import android.os.ParcelFileDescriptor;
+import android.os.PowerManager;
+import android.os.ResultReceiver;
+import android.os.SystemClock;
+import android.provider.DocumentsContract;
+import android.provider.MediaStore;
+import android.provider.OpenableColumns;
+import android.provider.Settings;
+import android.system.Os;
+import android.util.Log;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.MotionEvent;
+import android.view.PixelCopy;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
+import android.view.ViewTreeObserver;
+import android.view.Window;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.InputStreamReader;
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.security.MessageDigest;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.TimeZone;
+import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+import de.robv.android.xposed.IXposedHookLoadPackage;
+import com.smallhairball.deepx.LegacyXposedModule.Chain;
+import com.smallhairball.deepx.LegacyXposedModule.Hooker;
+import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
+
+/** Shared hook core used by both domestic and Google Play universal APKs. */
+
+/** Hook group extracted from Main.java: UI category (see JavaHookGuide). */
+final class HookUiSurface {
+    static final HookUiSurface INSTANCE = new HookUiSurface();
+
+    static final String WHALE_MOTION_FILE =
+            "/data/data/com.deepseek.chat/files/deekseep_whale_motion";
+
+    static final String HOME_GREETING_FILE =
+            "/data/data/com.deepseek.chat/files/deekseep_home_greeting.txt";
+
+    static final String NATIVE_SETTINGS_ENTRY_DISABLED_FILE =
+            "/data/data/com.deepseek.chat/files/deekseep_native_settings_entry_disabled";
+
+    static final String NATIVE_SETTINGS_ENTRY_ENABLED_FILE =
+            "/data/data/com.deepseek.chat/files/deekseep_native_settings_entry_enabled";
+
+
+    private static final ThreadLocal<BubbleRenderContext> BUBBLE_RENDER_CONTEXT =
+            new ThreadLocal<>();
+
+    private static final ThreadLocal<InputGlassContext> INPUT_GLASS_CONTEXT =
+            new ThreadLocal<>();
+
+    private static final ThreadLocal<ModeGlassContext> MODE_GLASS_CONTEXT =
+            new ThreadLocal<>();
+
+    private static final ConcurrentHashMap<String, Object> BUBBLE_DRAW_CALLBACKS =
+            new ConcurrentHashMap<>();
+
+    private static final Object ASSISTANT_AVATAR_PAINTER_LOCK = new Object();
+
+    private static volatile Object assistantAvatarPainter;
+
+    private static final Set<Object> assistantAvatarPainters =
+            Collections.newSetFromMap(new IdentityHashMap<Object, Boolean>());
+
+    private static volatile ClassLoader assistantAvatarPainterLoader;
+
+    private static volatile String assistantAvatarPainterPath = "";
+
+    private static volatile long assistantAvatarPainterModified = Long.MIN_VALUE;
+
+    private static volatile long assistantAvatarPainterLength = Long.MIN_VALUE;
+
+    private static final AtomicBoolean ADAPTED_SETTINGS_ENTRY_HOOKED =
+            new AtomicBoolean(false);
+
+    private static volatile int hostWelcomeMessageResourceId;
+
+    private static volatile int hostWelcomeTitleResourceId;
+
+    private static volatile String hostWelcomeMessagePattern = "";
+
+    private static volatile String hostWelcomeTitleText = "";
+
+    private static final AtomicBoolean HOME_GREETING_MATCH_LOGGED = new AtomicBoolean(false);
+
+    static volatile boolean nativeSettingsRowHooked;
+
+    static volatile boolean nativeSettingsRowEmitted;
+
+    private static final ThreadLocal<Boolean> NATIVE_SETTINGS_ROOT = new ThreadLocal<>();
+
+    private static final ThreadLocal<Boolean> NATIVE_SETTINGS_ROW_INSERTED = new ThreadLocal<>();
+
+    private static final ThreadLocal<Boolean> NATIVE_SETTINGS_ROW_INSERTING = new ThreadLocal<>();
+
+    // 0=single/full, 1=top half, 2=bottom half. Used only while emitting code257 rows.
+    private static final ThreadLocal<Integer> NATIVE_SETTINGS_ROW_POSITION = new ThreadLocal<>();
+
+    static final Map<Object, Boolean> WELCOME_WHALE_PAINTERS =
+            Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+
+    private static final Map<Object, Boolean> WELCOME_WHALE_COMPOSERS =
+            Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+
+    static final Map<Object, Boolean> WELCOME_WHALE_SCOPES =
+            Collections.synchronizedMap(new WeakHashMap<Object, Boolean>());
+
+    static volatile Method welcomeWhaleScopeInvalidate;
+
+    private static final AtomicBoolean welcomeWhaleCapturedLogged = new AtomicBoolean(false);
+
+    private static final AtomicBoolean welcomeWhaleDrawLogged = new AtomicBoolean(false);
+
+    static final AtomicInteger welcomeWhaleDrawCount = new AtomicInteger();
+
+    private static final AtomicBoolean welcomeWhaleScopeLogged = new AtomicBoolean(false);
+
+    static volatile long welcomeWhaleLastDrawAt;
+
+    static volatile float welcomeWhaleAngle;
+
+    static volatile int welcomeWhaleMotionEnabledCache = -1;
+    private static final AtomicBoolean V252_SETTINGS_ENTRY_HOOKED = new AtomicBoolean(false);
+    private static final AtomicBoolean V252_SETTINGS_ROW_INSERTED = new AtomicBoolean(false);
+
+/**
+     * DeepSeek 2.5.2/code273 settings entry.
+     *
+     * Verified against the live code273 host with a read-only probe round: opening the settings
+     * page executes ob8.d/4 (section header, several times) and a18.s/7 (SettingsPage render
+     * root, once at entry), among others. code273 renders its settings page as one large
+     * compiler-generated Composable whose slot sequence must stay intact, so we must never call a
+     * host composable from inside the render stream.
+     *
+     * We hook both confirmed coordinates and only ask the module to show its floating entry button
+     * (a plain Activity view add, entirely outside Compose). No host composable is invoked and no
+     * slot is touched, so the settings screen cannot be destabilised.
+     */
+    void hookV252SettingsEntry(final ClassLoader cl) {
+        if (!V252_SETTINGS_ENTRY_HOOKED.compareAndSet(false, true)) return;
+        // code273: the native "Plugins" section is now injected through the shared
+        // hookNativeSettingsEntry path (root = a18.s, section header = ob8.d, row = ob8.b).
+        // Nothing needs to be armed separately here; the shared path already stamps the
+        // render heartbeat and toggles the floating fallback. Keep this method as a marker
+        // so the call site stays explicit and old logs remain readable.
+        Main.log("v252 settings entry: native row injection path armed");
+    }
+
+    private int hookV252EntrySignal(final ClassLoader cl, final String owner, final String name,
+                                    final int params) {
+        try {
+            Class<?> klass = Class.forName(owner, false, cl);
+            for (Method candidate : klass.getDeclaredMethods()) {
+                if (!Modifier.isStatic(candidate.getModifiers())) continue;
+                if (!name.equals(candidate.getName())) continue;
+                if (candidate.getParameterTypes().length != params) continue;
+                candidate.setAccessible(true);
+                Main.MODULE.hook(candidate).intercept(new Hooker() {
+                    @Override public Object intercept(Chain chain) throws Throwable {
+                        Main.MODULE.stampV252SettingsRender();
+                        // Fallback only: the native "Plugins" row is injected through
+                        // hookNativeSettingsEntry. Show the floating entry only when that
+                        // injection did not materialise.
+                        final boolean emitted = nativeSettingsRowEmitted;
+                        Main.MODULE.main.post(new Runnable() {
+                            @Override public void run() {
+                                if (emitted || nativeSettingsRowEmitted) {
+                                    Main.MODULE.hideButton();
+                                } else if (isNativeSettingsEntryEnabled()) {
+                                    Main.MODULE.showButton();
+                                }
+                            }
+                        });
+                        return chain.proceed();
+                    }
+                });
+                return 1;
+            }
+        } catch (Throwable error) {
+            Main.log("v252 entry signal " + owner + "." + name + " failed: "
+                    + Main.safeThrowableMessage(error));
+        }
+        return 0;
+    }
+
+    /**
+     * WeKit registers a native WeChat setting-item provider. DeepSeek uses Compose instead, so
+     * the equivalent integration is a host-native section header followed by one host-native row.
+     */
+    void hookNativeSettingsEntry(final ClassLoader cl) {
+        // 2.5.2/code273 renamed the whole settings surface. It now goes through the SAME
+        // native-row injection path as every other host generation (root hook stamps the
+        // render flag, section-header hook emits the "Plugins" header + the DeePX row).
+        // The old hookV252SettingsEntry pass (floating-button only) is kept as a fallback
+        // and is still armed below, so if the injection fails the floating entry still shows.
+        if (HostCompat.isV252()) {
+            hookV252SettingsEntry(cl);
+        }
+        final String rootOwnerName;
+        final String rootMethodName;
+        final String componentOwnerName;
+        final String clickTypeName;
+        final String contentTypeName;
+        final String wrapperTypeName;
+        final String textOwnerName;
+        final String iconOwnerName;
+        final String arrowIconOwnerName;
+        final String iconFieldName;
+        final String arrowFieldName;
+        final String backgroundOwnerName;
+        final String backgroundMethodName;
+        final String roundedOwnerName;
+        final String roundedMethodName;
+        final String modifierOwnerName;
+        final String modifierFieldName;
+        final String heightOwnerName;
+        final String heightMethodName;
+        final String spacerOwnerName;
+        final String spacerMethodName;
+        if (HostCompat.isV253()) {
+            // code275 (2.5.3): fresh R8 pass after 2.5.2, derived directly from the 2.4.1 baseline.
+            // Settings render root moved fd5.c(13) -> i9b.s(7); component factory yu7 -> d39 with
+            // the header at d39.d(4) [SettingSectionTitle] and the row at d39.b(13) [SettingItem].
+            // Every symbol below was located in the code275 APK by a full-library unique
+            // structural/string fingerprint (see 映射表/name253_symbols.json).
+            rootOwnerName = "i9b";              // 241 fd5
+            rootMethodName = "s";               // 241 c (7 args, not 13)
+            componentOwnerName = "d39";         // 241 yu7
+            clickTypeName = "wd4";              // 241 il3
+            contentTypeName = "me4";            // 241 xl3
+            wrapperTypeName = "cl2";            // 241 zy1
+            textOwnerName = "b2a";              // 241 gq8
+            iconOwnerName = "aj7";              // 241 h19 (settings-row icon container, fields A-J + a-z)
+            arrowIconOwnerName = "aj7";         // 241 h19
+            iconFieldName = "D";                // info icon: sl2(21)=R.drawable.ic_info_outline (aj7.D),
+                                                // confirmed by i9b:2984 d39.b(..., aj7.D, ...) on SettingsPage
+            arrowFieldName = "E";               // trailing chevron: aj7.E = sl2(22) -> renders i9b.a(0),
+                                                // exactly mirroring 241 h19.A = qz1(1) -> fd5.a(0) (the chevron).
+                                                // NOT aj7.c (nl2(1)=FontSizePreferencePage glyph) and NOT aj7.F
+                                                // (sl2(24)=profile_check_for_updates label).
+            backgroundOwnerName = "s6b";        // 241 bu9
+            backgroundMethodName = "I";         // 241 x
+            roundedOwnerName = "ck8";           // 241 jg7
+            roundedMethodName = "b";            // 241 a (ck8.b(float) 1-arg)
+            modifierOwnerName = "lt6";          // 241 jv5 (Modifier.INSTANCE singleton; NOT ot6 which is
+                                                // the code275 Modifier interface itself)
+            modifierFieldName = "a";            // 241 a (Companion singleton field)
+            heightOwnerName = "ed9";            // 241 y48
+            heightMethodName = "f";             // 241 e (code275 renamed the 2-arg height builder to f)
+            spacerOwnerName = "x29";            // 241 bf5
+            spacerMethodName = "f";             // 241 b
+        } else if (HostCompat.isV252()) {
+            // code273 (2.5.2): the settings surface was renamed again. SettingSectionTitle
+            // lives in ob8.d(4) and the setting row in ob8.b(13). Root = a18.s(7), which
+            // wraps the whole settings Composable. Icons are not reused here (2.5.2 has no
+            // compatible z66.v / rc5.d constants), so the row is emitted without a glyph.
+            rootOwnerName = "a18";
+            rootMethodName = "s";
+            componentOwnerName = "ob8";
+            clickTypeName = "hv3";
+            contentTypeName = "wv3";
+            wrapperTypeName = "t62";
+            textOwnerName = "z89";
+            iconOwnerName = null;
+            arrowIconOwnerName = null;
+            iconFieldName = null;
+            arrowFieldName = null;
+            backgroundOwnerName = null;
+            backgroundMethodName = null;
+            roundedOwnerName = null;
+            roundedMethodName = null;
+            modifierOwnerName = null;
+            modifierFieldName = null;
+            heightOwnerName = null;
+            heightMethodName = null;
+            spacerOwnerName = null;
+            spacerMethodName = null;
+        } else if (HostCompat.isV241()) {
+            rootOwnerName = "fd5";
+            rootMethodName = "c";
+            componentOwnerName = "yu7";
+            clickTypeName = "il3";
+            contentTypeName = "xl3";
+            wrapperTypeName = "zy1";
+            textOwnerName = "gq8";
+            iconOwnerName = "h19";
+            arrowIconOwnerName = "h19";
+            iconFieldName = "z";
+            arrowFieldName = "A";
+            backgroundOwnerName = "bu9";
+            backgroundMethodName = "x";
+            roundedOwnerName = "jg7";
+            roundedMethodName = "a";
+            modifierOwnerName = "jv5";
+            modifierFieldName = "a";
+            heightOwnerName = "y48";
+            heightMethodName = "e";
+            spacerOwnerName = "bf5";
+            spacerMethodName = "b";
+        } else if (HostCompat.isV236()) {
+            rootOwnerName = "wc5";
+            rootMethodName = "c";
+            componentOwnerName = "zm7";
+            clickTypeName = "rg3";
+            contentTypeName = "gh3";
+            wrapperTypeName = "pv1";
+            textOwnerName = "wh8";
+            // yd7.b/c render the “继续” label in code249. Reuse DeepSeek's actual
+            // ic_info_outline and chevron-right composables instead of drawing our own.
+            iconOwnerName = "z66";
+            arrowIconOwnerName = "rc5";
+            iconFieldName = "v";
+            arrowFieldName = "d";
+            backgroundOwnerName = "wf9";
+            backgroundMethodName = "z";
+            roundedOwnerName = "j97";
+            roundedMethodName = "a";
+            modifierOwnerName = "pp5";
+            modifierFieldName = "a";
+            heightOwnerName = "lw7";
+            heightMethodName = "d";
+            spacerOwnerName = "pc5";
+            spacerMethodName = "e";
+        } else if (HostCompat.isV234() && HostCompat.isGooglePlay()) {
+            rootOwnerName = "pf6";
+            rootMethodName = "i";
+            componentOwnerName = "nq7";
+            clickTypeName = "mi3";
+            contentTypeName = "bj3";
+            wrapperTypeName = "cx1";
+            textOwnerName = "ql8";
+            iconOwnerName = "eq0";
+            arrowIconOwnerName = iconOwnerName;
+            iconFieldName = "v";
+            arrowFieldName = "w";
+            backgroundOwnerName = "zh9";
+            backgroundMethodName = "z";
+            roundedOwnerName = "kc7";
+            roundedMethodName = "a";
+            modifierOwnerName = "wq5";
+            modifierFieldName = "a";
+            heightOwnerName = "a08";
+            heightMethodName = "d";
+            spacerOwnerName = "uq6";
+            spacerMethodName = "a";
+        } else if (HostCompat.isV234()) {
+            rootOwnerName = "qc5";
+            rootMethodName = "c";
+            componentOwnerName = "sm7";
+            clickTypeName = "ig3";
+            contentTypeName = "xg3";
+            wrapperTypeName = "gv1";
+            textOwnerName = "qh8";
+            // r66.v is DeepSeek's own info glyph; r66.n is its native chevron.
+            iconOwnerName = "r66";
+            arrowIconOwnerName = iconOwnerName;
+            iconFieldName = "v";
+            arrowFieldName = "n";
+            backgroundOwnerName = "qf9";
+            backgroundMethodName = "F";
+            roundedOwnerName = "b97";
+            roundedMethodName = "a";
+            modifierOwnerName = "ip5";
+            modifierFieldName = "a";
+            heightOwnerName = "fw7";
+            heightMethodName = "e";
+            spacerOwnerName = "kc5";
+            spacerMethodName = "c";
+        } else if (HostCompat.isV230() && !HostCompat.isV234()) {
+            rootOwnerName = "t55";
+            rootMethodName = "l";
+            componentOwnerName = "kf7";
+            clickTypeName = "id3";
+            contentTypeName = "xd3";
+            wrapperTypeName = "nt1";
+            textOwnerName = "j98";
+            iconOwnerName = "h67";
+            arrowIconOwnerName = iconOwnerName;
+            iconFieldName = "w";
+            arrowFieldName = "x";
+            backgroundOwnerName = "vd0";
+            backgroundMethodName = "j";
+            roundedOwnerName = "y17";
+            roundedMethodName = "a";
+            modifierOwnerName = "ij5";
+            modifierFieldName = "a";
+            heightOwnerName = "io7";
+            heightMethodName = "e";
+            spacerOwnerName = "j55";
+            spacerMethodName = "c";
+        } else if (!HostCompat.isV230()) {
+            rootOwnerName = "u25";
+            rootMethodName = "i";
+            componentOwnerName = "mc7";
+            clickTypeName = "xa3";
+            contentTypeName = "mb3";
+            wrapperTypeName = "jr1";
+            textOwnerName = "i68";
+            iconOwnerName = "hf8";
+            arrowIconOwnerName = iconOwnerName;
+            iconFieldName = "y";
+            arrowFieldName = "z";
+            backgroundOwnerName = "i39";
+            backgroundMethodName = "u";
+            roundedOwnerName = "fz6";
+            roundedMethodName = "a";
+            modifierOwnerName = "ng5";
+            modifierFieldName = "a";
+            heightOwnerName = "kl7";
+            heightMethodName = "e";
+            spacerOwnerName = "o25";
+            spacerMethodName = "c";
+        } else {
+            Main.log("native settings row mapping unavailable; keeping floating fallback");
+            return;
+        }
+        try {
+            Class<?> rootOwner = Class.forName(rootOwnerName, false, cl);
+            Method root = findStaticMethod(rootOwner, rootMethodName,
+                    (HostCompat.isV252() || HostCompat.isV253()) ? 7 : 13);
+            if (root == null) throw new NoSuchMethodException(rootOwnerName + "."
+                    + rootMethodName + "/13");
+
+            Class<?> componentOwner = Class.forName(componentOwnerName, false, cl);
+            Method row = findStaticMethod(componentOwner, "b",
+                    (HostCompat.isV252() || HostCompat.isV253()) ? 13 : 12);
+            Method header = findStaticMethod(componentOwner, "d", 4);
+            if (row == null || header == null) {
+                throw new NoSuchMethodException(componentOwnerName + ".b/d");
+            }
+
+            Class<?> textOwner = Class.forName(textOwnerName, false, cl);
+            Method text = null;
+            for (Method candidate : textOwner.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (Modifier.isStatic(candidate.getModifiers())
+                        && "b".equals(candidate.getName())
+                        && parameters.length == 18
+                        && parameters[0] == String.class) {
+                    text = candidate;
+                    break;
+                }
+            }
+            if (text == null) throw new NoSuchMethodException(textOwnerName + ".b/18");
+
+            final Class<?> clickType = Class.forName(clickTypeName, false, cl);
+            final Class<?> contentType = Class.forName(contentTypeName, false, cl);
+            Class<?> wrapperType = Class.forName(wrapperTypeName, false, cl);
+            Constructor<?> wrapperConstructor = wrapperType.getDeclaredConstructor(
+                    Object.class, boolean.class, int.class);
+            wrapperConstructor.setAccessible(true);
+            Class<?> unitType = Class.forName(HostCompat.unitClass(), false, cl);
+            Field unitField = unitType.getDeclaredField(HostCompat.unitField());
+            unitField.setAccessible(true);
+            final Object unit = unitField.get(null);
+            Object resolvedIcon = null;
+            Object resolvedArrow = null;
+            if (iconOwnerName != null && arrowIconOwnerName != null) {
+                Class<?> icons = Class.forName(iconOwnerName, false, cl);
+                Class<?> arrowIcons = Class.forName(arrowIconOwnerName, false, cl);
+                Field infoIcon = icons.getDeclaredField(iconFieldName);
+                Field arrowIcon = arrowIcons.getDeclaredField(arrowFieldName);
+                infoIcon.setAccessible(true);
+                arrowIcon.setAccessible(true);
+                resolvedIcon = infoIcon.get(null);
+                resolvedArrow = arrowIcon.get(null);
+            }
+            final Object nativeIcon = resolvedIcon;
+            final Object nativeArrow = resolvedArrow;
+            final Method nativeRow = row;
+            final Method nativeHeader = header;
+            final Method nativeText = text;
+            final NativeSettingsDecoration nativeDecoration =
+                    (backgroundOwnerName == null)
+                            ? null
+                            : prepareNativeSettingsDecoration(
+                                    cl, componentOwner, backgroundOwnerName,
+                                    backgroundMethodName, roundedOwnerName,
+                                    roundedMethodName, modifierOwnerName,
+                                    modifierFieldName, heightOwnerName,
+                                    heightMethodName, spacerOwnerName,
+                                    spacerMethodName);
+
+            final Object click = Proxy.newProxyInstance(cl, new Class<?>[]{clickType},
+                    new InvocationHandler() {
+                        @Override public Object invoke(Object proxy, Method method, Object[] args) {
+                            if (method.getDeclaringClass() == Object.class) {
+                                if ("toString".equals(method.getName())) return "DeePXSettingsClick";
+                                if ("hashCode".equals(method.getName())) {
+                                    return Integer.valueOf(System.identityHashCode(proxy));
+                                }
+                                if ("equals".equals(method.getName())) {
+                                    return Boolean.valueOf(args != null && args.length > 0
+                                            && proxy == args[0]);
+                                }
+                            }
+                            final String clickInvokeName = HostCompat.isV253() ? "w" : "u";
+                            if (clickInvokeName.equals(method.getName())) {
+                                Main.MODULE.main.post(new Runnable() {
+                                    @Override public void run() {
+                                        Activity activity = Main.MODULE.curAct.get();
+                                        if (activity == null || activity.isFinishing()) return;
+                                        if (BuildInfo.PROTECTED_BUILD && !CloudPromptClient.hasValidLicense(activity)) {
+                                            DeePXUi.showActivationDialog(activity, Main.MODULE.hostClassLoader, () -> {
+                                                Main.MODULE.performModuleInjection(activity, Main.MODULE.hostClassLoader);
+                                            });
+                                            return;
+                                        }
+                                        try { DeePXUi.showPage(activity); }
+                                        catch (Throwable error) {
+                                            Main.log("native settings entry click failed: "
+                                                    + Main.safeThrowableMessage(error));
+                                        }
+                                    }
+                                });
+                            }
+                            return unit;
+                        }
+                    });
+            final Object title = makeNativeTextContent(
+                    cl, contentType, nativeText, unit, "DeePX", "Title");
+            final Object headerContent = makeNativeTextContent(
+                    cl, contentType, nativeText, unit, null, "Header");
+            final Object pluginHeader = wrapperConstructor.newInstance(
+                    headerContent, false, -2075140913);
+
+            root.setAccessible(true);
+            Main.MODULE.hook(root).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    Main.MODULE.stampV252SettingsRender();
+                    // Legacy (floating) entry: when the native-row switch is OFF the ball must
+                    // appear while the settings page renders. This is a plain Activity view add
+                    // (outside Compose), so no host composable is invoked and no slot is touched.
+                    if (!isNativeSettingsEntryEnabled()) {
+                        Main.MODULE.main.post(new Runnable() {
+                            @Override public void run() { Main.MODULE.showButton(); }
+                        });
+                    }
+                    Boolean previousRoot = NATIVE_SETTINGS_ROOT.get();
+                    NATIVE_SETTINGS_ROOT.set(Boolean.TRUE);
+                    // A fresh injection cycle per settings render. NOTE: the "already inserted"
+                    // latch is deliberately NOT restored to its previous value here. The header
+                    // composes OUTSIDE this root window (lazy list items), so it sets the latch
+                    // AFTER this finally runs; copying a stale value back used to leave the latch
+                    // stuck at TRUE, and the entry was missing on every open after the first one.
+                    NATIVE_SETTINGS_ROW_INSERTED.set(Boolean.FALSE);
+                    // Every settings-page entry starts a fresh injection cycle.
+                    nativeSettingsRowEmitted = false;
+                    try {
+                        return chain.proceed();
+                    } finally {
+                        if (previousRoot == null) NATIVE_SETTINGS_ROOT.remove();
+                        else NATIVE_SETTINGS_ROOT.set(previousRoot);
+                        // Leave the latch as the header left it; the next settings render
+                        // resets it to FALSE above.
+                    }
+                }
+            });
+
+            header.setAccessible(true);
+            Main.MODULE.hook(header).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    Main.log("native settings header hit (v252=" + HostCompat.isV252()
+                            + " root=" + NATIVE_SETTINGS_ROOT.get()
+                            + " inserted=" + NATIVE_SETTINGS_ROW_INSERTED.get()
+                            + " inserting=" + NATIVE_SETTINGS_ROW_INSERTING.get()
+                            + " enabled=" + isNativeSettingsEntryEnabled()
+                            + " emitted=" + nativeSettingsRowEmitted
+                            + " hooked=" + nativeSettingsRowHooked + ")");
+                    boolean rootOk = HostCompat.isV252() || HostCompat.isV253()
+                            || Boolean.TRUE.equals(NATIVE_SETTINGS_ROOT.get());
+                    if (nativeSettingsRowHooked && isNativeSettingsEntryEnabled()
+                            && rootOk
+                            && !Boolean.TRUE.equals(NATIVE_SETTINGS_ROW_INSERTED.get())
+                            && !Boolean.TRUE.equals(NATIVE_SETTINGS_ROW_INSERTING.get())
+                            && (!BuildInfo.PROTECTED_BUILD || CloudPromptClient.hasValidLicense(Main.hostApplicationContext))) {
+                        NATIVE_SETTINGS_ROW_INSERTED.set(Boolean.TRUE);
+                        NATIVE_SETTINGS_ROW_INSERTING.set(Boolean.TRUE);
+                        try {
+                            nativeHeader.invoke(null,
+                                    chain.getArg(0), pluginHeader, chain.getArg(2), 54);
+                            if (nativeDecoration != null) {
+                                nativeDecoration.emitHeaderGap(chain.getArg(2));
+                            }
+                            NATIVE_SETTINGS_ROW_POSITION.set(Integer.valueOf(0));
+                            if (HostCompat.isV252()) {
+                                // ob8.b(13): (Modifier, click, bool, bool, long, title,
+                                //             content, icon, float, arrow, composer, f1, f2)
+                                nativeRow.invoke(null,
+                                        null, click, false, false, 0L,
+                                        title, null, nativeIcon, 28.0f, nativeArrow,
+                                        chain.getArg(2), 906166272, 93);
+                            } else if (HostCompat.isV253()) {
+                                // d39.b(13) real slot order (measured on aq2:2888):
+                                //   (Modifier, click, bool, bool, long, ICON, TITLE, SUB, float, ARROW,
+                                //    composer, f1, f2)
+                                // Slot semantics proven by the host's OWN rows in i9b
+                                // (SettingsPage), three-way cross-checked:
+                                //   account row  : (aj7.f, null, aj7.g, NaN, aj7.h="账号管理")
+                                //   data row     : (aj7.i, null, aj7.j, NaN, aj7.k="数据管理")
+                                //   update row   : (aj7.D=ⓘ, version, aj7.E=›, NaN, aj7.F="检查更新")
+                                // => slot6 = leading icon, slot7 = optional secondary,
+                                //    slot8 = trailing chevron, slot9 = float, slot10 = TITLE.
+                                nativeRow.invoke(null,
+                                        null, click, false, false, 0L,
+                                        nativeIcon, null, nativeArrow, Float.NaN, title,
+                                        chain.getArg(2), 819658752, 285);
+                            } else {
+                                nativeRow.invoke(null,
+                                        null, click, false, false, 0L,
+                                        nativeIcon, null, nativeArrow, title,
+                                        chain.getArg(2), 113442816, 93);
+                            }
+                            if (nativeDecoration != null) {
+                                nativeDecoration.emitSectionGap(chain.getArg(2));
+                            }
+                            nativeSettingsRowEmitted = true;
+                            Main.MODULE.main.post(new Runnable() {
+                                @Override public void run() {
+                                    if (isNativeSettingsEntryEnabled()) Main.MODULE.hideButton();
+                                }
+                            });
+                        } catch (Throwable error) {
+                            // Do NOT permanently disarm: a failed emit on one page open must not
+                            // kill the entry for the rest of the process. The settings page is
+                            // recomposed on every open, so just retry on the next one.
+                            nativeSettingsRowEmitted = false;
+                            Main.log("native settings section emit failed: "
+                                    + Main.safeThrowableMessage(error));
+                            Main.MODULE.main.post(new Runnable() {
+                                @Override public void run() { Main.MODULE.showButton(); }
+                            });
+                        } finally {
+                            NATIVE_SETTINGS_ROW_POSITION.remove();
+                            NATIVE_SETTINGS_ROW_INSERTING.remove();
+                        }
+                    }
+                    return chain.proceed();
+                }
+            });
+            nativeSettingsRowHooked = true;
+            Main.log("native settings section hooked " + rootOwnerName + "." + rootMethodName
+                    + " -> " + componentOwnerName + ".d/b icon="
+                    + iconOwnerName + "." + iconFieldName + " arrow="
+                    + arrowIconOwnerName + "." + arrowFieldName);
+        } catch (Throwable error) {
+            nativeSettingsRowHooked = false;
+            nativeSettingsRowEmitted = false;
+            Main.log("native settings section unavailable: " + Main.safeThrowableMessage(error));
+        }
+    }
+
+    private static Method findStaticMethod(Class<?> owner, String name, int parameterCount) {
+        for (Method candidate : owner.getDeclaredMethods()) {
+            if (Modifier.isStatic(candidate.getModifiers())
+                    && name.equals(candidate.getName())
+                    && candidate.getParameterTypes().length == parameterCount) {
+                candidate.setAccessible(true);
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private NativeSettingsDecoration prepareNativeSettingsDecoration(
+            final ClassLoader cl, Class<?> componentOwner,
+            String backgroundOwnerName, String backgroundMethodName,
+            String roundedOwnerName, String roundedMethodName,
+            String modifierOwnerName, String modifierFieldName,
+            String heightOwnerName, String heightMethodName,
+            String spacerOwnerName, String spacerMethodName) {
+        try {
+            Class<?> backgroundOwner = Class.forName(backgroundOwnerName, false, cl);
+            final Method background = findStaticMethod(
+                    backgroundOwner, backgroundMethodName, 3);
+            if (background == null) throw new NoSuchMethodException(
+                    backgroundOwnerName + "." + backgroundMethodName + "/3");
+
+            Class<?> roundedOwner = Class.forName(roundedOwnerName, false, cl);
+            Method rounded = null;
+            for (Method candidate : roundedOwner.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (Modifier.isStatic(candidate.getModifiers())
+                        && roundedMethodName.equals(candidate.getName())
+                        && parameters.length == 1 && parameters[0] == float.class
+                        && background.getParameterTypes()[2]
+                        .isAssignableFrom(candidate.getReturnType())) {
+                    candidate.setAccessible(true);
+                    rounded = candidate;
+                    break;
+                }
+            }
+            if (rounded == null) throw new NoSuchMethodException(
+                    roundedOwnerName + "." + roundedMethodName + "(float)");
+            final Object roundedShape = rounded.invoke(null, Float.valueOf(16f));
+            Object topShapeValue = roundedShape;
+            Object bottomShapeValue = roundedShape;
+            if (HostCompat.isV241()) {
+                // code257 uses jg7.b(float,float,float,float); code273 keeps it; code275 moves
+                // the 4-arg connected-corner builder to ck8.c(float,float,float,float).
+                final String connectedMethodName = HostCompat.isV253() ? "c" : "b";
+                Method connectedCorners = null;
+                for (Method candidate : roundedOwner.getDeclaredMethods()) {
+                    Class<?>[] parameters = candidate.getParameterTypes();
+                    if (Modifier.isStatic(candidate.getModifiers())
+                            && connectedMethodName.equals(candidate.getName())
+                            && parameters.length == 4
+                            && parameters[0] == float.class
+                            && parameters[1] == float.class
+                            && parameters[2] == float.class
+                            && parameters[3] == float.class
+                            && background.getParameterTypes()[2]
+                            .isAssignableFrom(candidate.getReturnType())) {
+                        candidate.setAccessible(true);
+                        connectedCorners = candidate;
+                        break;
+                    }
+                }
+                if (connectedCorners == null) throw new NoSuchMethodException(
+                        roundedOwnerName + "." + connectedMethodName + "(float,float,float,float)");
+                topShapeValue = connectedCorners.invoke(null,
+                        Float.valueOf(16f), Float.valueOf(16f),
+                        Float.valueOf(0f), Float.valueOf(0f));
+                bottomShapeValue = connectedCorners.invoke(null,
+                        Float.valueOf(0f), Float.valueOf(0f),
+                        Float.valueOf(16f), Float.valueOf(16f));
+            }
+            final Object connectedTopShape = topShapeValue;
+            final Object connectedBottomShape = bottomShapeValue;
+
+            Class<?> modifierOwner = Class.forName(modifierOwnerName, false, cl);
+            Field modifierField = modifierOwner.getDeclaredField(modifierFieldName);
+            modifierField.setAccessible(true);
+            Object baseModifier = modifierField.get(null);
+            Class<?> heightOwner = Class.forName(heightOwnerName, false, cl);
+            Method height = null;
+            for (Method candidate : heightOwner.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (Modifier.isStatic(candidate.getModifiers())
+                        && heightMethodName.equals(candidate.getName())
+                        && parameters.length == 2 && parameters[1] == float.class
+                        && parameters[0].isInstance(baseModifier)) {
+                    candidate.setAccessible(true);
+                    height = candidate;
+                    break;
+                }
+            }
+            if (height == null) throw new NoSuchMethodException(
+                    heightOwnerName + "." + heightMethodName + "(modifier,float)");
+            Object headerGapModifier = height.invoke(
+                    null, baseModifier, Float.valueOf(4f));
+            Object sectionGapModifier = height.invoke(
+                    null, baseModifier, Float.valueOf(19f));
+            Class<?> spacerOwner = Class.forName(spacerOwnerName, false, cl);
+            Method spacer = null;
+            for (Method candidate : spacerOwner.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (Modifier.isStatic(candidate.getModifiers())
+                        && spacerMethodName.equals(candidate.getName())
+                        && parameters.length == 2
+                        && parameters[1].isInstance(sectionGapModifier)) {
+                    candidate.setAccessible(true);
+                    spacer = candidate;
+                    break;
+                }
+            }
+            if (spacer == null) throw new NoSuchMethodException(
+                    spacerOwnerName + "." + spacerMethodName + "/2");
+
+            Method rowSurface = findStaticMethod(componentOwner, "a", 4);
+            deoptimizeBubbleMethod(rowSurface);
+            deoptimizeBubbleMethod(background);
+            Main.MODULE.hook(background).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    if (!Boolean.TRUE.equals(NATIVE_SETTINGS_ROW_INSERTING.get())) {
+                        return chain.proceed();
+                    }
+                    Object[] args = chain.getArgs().toArray();
+                    Integer position = NATIVE_SETTINGS_ROW_POSITION.get();
+                    args[2] = position != null && position.intValue() == 1
+                            ? connectedTopShape
+                            : position != null && position.intValue() == 2
+                            ? connectedBottomShape : roundedShape;
+                    return chain.proceed(args);
+                }
+            });
+            Main.log("native settings decoration ready radius=16dp connected="
+                    + HostCompat.isV241() + " headerGap=4dp sectionGap=19dp");
+            return new NativeSettingsDecoration(
+                    spacer, headerGapModifier, sectionGapModifier);
+        } catch (Throwable error) {
+            Main.log("native settings decoration unavailable: "
+                    + Main.safeThrowableMessage(error));
+            return null;
+        }
+    }
+
+    private static final class NativeSettingsDecoration {
+        final Method spacer;
+        final Object headerGapModifier;
+        final Object sectionGapModifier;
+
+        NativeSettingsDecoration(
+                Method spacer, Object headerGapModifier, Object sectionGapModifier) {
+            this.spacer = spacer;
+            this.headerGapModifier = headerGapModifier;
+            this.sectionGapModifier = sectionGapModifier;
+        }
+
+        void emitHeaderGap(Object composer) throws Throwable {
+            spacer.invoke(null, composer, headerGapModifier);
+        }
+
+        void emitSectionGap(Object composer) throws Throwable {
+            spacer.invoke(null, composer, sectionGapModifier);
+        }
+    }
+
+    private static Object makeNativeTextContent(
+            ClassLoader cl, final Class<?> contentType, final Method nativeText,
+            final Object unit, final String fixedText, final String debugName) {
+        return Proxy.newProxyInstance(cl, new Class<?>[]{contentType}, new InvocationHandler() {
+            @Override public Object invoke(Object proxy, Method method, Object[] args)
+                    throws Throwable {
+                if (method.getDeclaringClass() == Object.class) {
+                    if ("toString".equals(method.getName())) return "DeePXSettings" + debugName;
+                    if ("hashCode".equals(method.getName())) {
+                        return Integer.valueOf(System.identityHashCode(proxy));
+                    }
+                    if ("equals".equals(method.getName())) {
+                        return Boolean.valueOf(args != null && args.length > 0
+                                && proxy == args[0]);
+                    }
+                }
+                boolean lambdaInvoke = HostCompat.isV252()
+                        ? "q".equals(method.getName())
+                        : "r".equals(method.getName());
+                if (lambdaInvoke && args != null && args.length >= 1) {
+                    String value = fixedText != null ? fixedText
+                            : UiLanguage.text(Main.hostApplicationContext, "插件", "Plugins");
+                    nativeText.invoke(null,
+                            value, null, 0L, null, 0L, null, 0L, null, 0L,
+                            0, false, 0, 0, null, args[0], 0, 0, 262142);
+                }
+                return unit;
+            }
+        });
+    }
+
+    /** Install the settings entry resolved by the reviewed static compatibility table. */
+    void maybeInstallAdaptedSettingsEntry(Context context, ClassLoader loader) {
+        if (!ADAPTED_SETTINGS_ENTRY_HOOKED.compareAndSet(false, true)) return;
+        try {
+            Method method = HostCompat.settingsEntryMethod(loader);
+            if (method == null) {
+                ADAPTED_SETTINGS_ENTRY_HOOKED.set(false);
+                return;
+            }
+            Main.MODULE.hook(method).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    Object event = null;
+                    try { event = chain.getArg(0); } catch (Throwable ignored) {}
+                    Object result = chain.proceed();
+                    if ("settings".equals(event)) {
+                        Main.MODULE.main.post(new Runnable() {
+                            @Override public void run() { Main.MODULE.showButton(); }
+                        });
+                    }
+                    return result;
+                }
+            });
+            Main.log("hooked settings entry " + method.getDeclaringClass().getName()
+                    + "." + method.getName());
+        } catch (Throwable error) {
+            ADAPTED_SETTINGS_ENTRY_HOOKED.set(false);
+            Main.log("hook cached settings entry failed: " + error);
+        }
+    }
+
+    /** Replaces only DeepSeek's assistant-avatar drawable with the configured local image. */
+    void hookAssistantAvatarPainter(final ClassLoader cl) throws Exception {
+        final String loaderOwner;
+        final String loaderMethod;
+        final int parameterCount;
+        final String painterType;
+        final String metadataType;
+        final String painterFilterMethod;
+        if (HostCompat.isV241()) {
+            loaderOwner = "df5";
+            loaderMethod = "s";
+            parameterCount = 3;
+            painterType = "c43";
+            metadataType = "n43";
+            painterFilterMethod = "d";
+        } else if (HostCompat.isV236()) {
+            loaderOwner = "ce5";
+            loaderMethod = "f0";
+            parameterCount = 3;
+            painterType = "zz2";
+            metadataType = "k03";
+            painterFilterMethod = "d";
+        } else if (HostCompat.isV234()) {
+            if (HostCompat.isGooglePlay()) {
+                loaderOwner = "ms9";
+                loaderMethod = "U";
+                painterType = "u13";
+                metadataType = "f23";
+                painterFilterMethod = "e";
+            } else {
+                loaderOwner = "ye5";
+                loaderMethod = "C";
+                painterType = "rz2";
+                metadataType = "c03";
+                painterFilterMethod = "d";
+            }
+            parameterCount = 3;
+        } else if (HostCompat.isV230()) {
+            loaderOwner = "t75";
+            loaderMethod = "s";
+            parameterCount = 2;
+            painterType = "dx2";
+            metadataType = "px2";
+            painterFilterMethod = "d";
+        } else {
+            loaderOwner = "z45";
+            loaderMethod = "w";
+            parameterCount = 2;
+            painterType = "wu2";
+            metadataType = "iv2";
+            painterFilterMethod = "d";
+        }
+
+        Class<?> painterClass = cl.loadClass(painterType);
+        Method filterSetter = null;
+        for (Method candidate : painterClass.getDeclaredMethods()) {
+            if (painterFilterMethod.equals(candidate.getName())
+                    && candidate.getParameterTypes().length == 1
+                    && candidate.getReturnType() == boolean.class) {
+                filterSetter = candidate;
+                break;
+            }
+        }
+        if (filterSetter == null) {
+            throw new NoSuchMethodException(painterType + "."
+                    + painterFilterMethod + "(ColorFilter)");
+        }
+        filterSetter.setAccessible(true);
+        Main.MODULE.deoptimize(filterSetter);
+        Main.MODULE.hook(filterSetter).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                // Material Icon applies its semantic blue tint through Painter.applyColorFilter.
+                // The custom avatar is a real image, so keep its original colours; every other
+                // bitmap painter continues through DeepSeek's unmodified implementation.
+                if (isAssistantAvatarPainter(chain.getThisObject())) return Boolean.TRUE;
+                return chain.proceed();
+            }
+        });
+
+        // code257 renders the assistant drawable through Icon, which also forwards its own
+        // content-alpha into Painter.applyAlpha. Returning true without mutating c43.h keeps the
+        // imported image opaque. This is deliberately V241-only: older host branches have their
+        // own painter ABI and retain their verified behavior unchanged.
+        if (HostCompat.isV241()) {
+            Method alphaSetter = null;
+            for (Method candidate : painterClass.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if ("b".equals(candidate.getName())
+                        && parameters.length == 1
+                        && parameters[0] == float.class
+                        && candidate.getReturnType() == boolean.class) {
+                    alphaSetter = candidate;
+                    break;
+                }
+            }
+            if (alphaSetter == null) {
+                throw new NoSuchMethodException(painterType + ".b(float)");
+            }
+            alphaSetter.setAccessible(true);
+            Main.MODULE.deoptimize(alphaSetter);
+            Main.MODULE.hook(alphaSetter).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    if (isAssistantAvatarPainter(chain.getThisObject())) return Boolean.TRUE;
+                    return chain.proceed();
+                }
+            });
+        }
+
+        Method loader = null;
+        for (Method candidate : cl.loadClass(loaderOwner).getDeclaredMethods()) {
+            Class<?>[] parameters = candidate.getParameterTypes();
+            if (Modifier.isStatic(candidate.getModifiers())
+                    && loaderMethod.equals(candidate.getName())
+                    && parameters.length == parameterCount
+                    && parameters[0] == int.class) {
+                loader = candidate;
+                break;
+            }
+        }
+        if (loader == null) {
+            throw new NoSuchMethodException(loaderOwner + "." + loaderMethod
+                    + "/" + parameterCount);
+        }
+        loader.setAccessible(true);
+        Main.MODULE.deoptimize(loader);
+        final String painterClassName = painterType;
+        final String metadataClassName = metadataType;
+        Main.MODULE.hook(loader).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                Object id = chain.getArg(0);
+                // R.drawable.assistant_message_avatar is stable across all supported hosts.
+                if (!(id instanceof Number) || ((Number) id).intValue() != 0x7f070059) {
+                    return chain.proceed();
+                }
+                Object custom = assistantAvatarPainter(
+                        cl, painterClassName, metadataClassName);
+                return custom == null ? chain.proceed() : custom;
+            }
+        });
+        Main.log("installed custom assistant avatar painter " + loaderOwner + "."
+                + loaderMethod + " -> " + painterType);
+    }
+
+    private static Object assistantAvatarPainter(
+            ClassLoader cl, String painterType, String metadataType) {
+        File file = ChatAppearance.assistantAvatarFileForRender();
+        if (file == null) {
+            synchronized (ASSISTANT_AVATAR_PAINTER_LOCK) {
+                assistantAvatarPainter = null;
+                assistantAvatarPainters.clear();
+                assistantAvatarPainterPath = "";
+                assistantAvatarPainterModified = Long.MIN_VALUE;
+                assistantAvatarPainterLength = Long.MIN_VALUE;
+            }
+            return null;
+        }
+        String path = file.getAbsolutePath();
+        long modified = file.lastModified();
+        long length = file.length();
+        Object cachedPainter = assistantAvatarPainter;
+        if (cachedPainter != null && assistantAvatarPainterLoader == cl
+                && path.equals(assistantAvatarPainterPath)
+                && modified == assistantAvatarPainterModified
+                && length == assistantAvatarPainterLength) {
+            return cachedPainter;
+        }
+        synchronized (ASSISTANT_AVATAR_PAINTER_LOCK) {
+            cachedPainter = assistantAvatarPainter;
+            if (cachedPainter != null && assistantAvatarPainterLoader == cl
+                    && path.equals(assistantAvatarPainterPath)
+                    && modified == assistantAvatarPainterModified
+                    && length == assistantAvatarPainterLength) {
+                return cachedPainter;
+            }
+            try {
+                Bitmap bitmap = ChatAppearance.loadAssistantAvatarBitmap(file, 512);
+                if (bitmap == null) return null;
+                Class<?> metadata = cl.loadClass(metadataType);
+                Constructor<?> metadataConstructor =
+                        metadata.getDeclaredConstructor(int.class, boolean.class);
+                metadataConstructor.setAccessible(true);
+                Object exif = metadataConstructor.newInstance(1, false);
+                Class<?> painter = cl.loadClass(painterType);
+                Constructor<?> painterConstructor =
+                        painter.getDeclaredConstructor(Bitmap.class, metadata);
+                painterConstructor.setAccessible(true);
+                Object created = painterConstructor.newInstance(bitmap, exif);
+                assistantAvatarPainter = created;
+                assistantAvatarPainters.add(created);
+                assistantAvatarPainterLoader = cl;
+                assistantAvatarPainterPath = path;
+                assistantAvatarPainterModified = modified;
+                assistantAvatarPainterLength = length;
+                return created;
+            } catch (Throwable error) {
+                Main.log("custom assistant avatar decode failed: "
+                        + Main.safeThrowableMessage(error));
+                return null;
+            }
+        }
+    }
+
+    private static boolean isAssistantAvatarPainter(Object candidate) {
+        if (candidate == null) return false;
+        synchronized (ASSISTANT_AVATAR_PAINTER_LOCK) {
+            return candidate == assistantAvatarPainter
+                    || assistantAvatarPainters.contains(candidate);
+        }
+    }
+
+    /**
+     * Applies chat-bubble styling to the host's real Compose message nodes.  The hooks stay
+     * deliberately below the message text/actions layer: only the Surface/Modifier chain is
+     * changed, while imported decorations are drawn after the bubble content.
+     */
+    void hookChatBubbleCustomization(
+            final ClassLoader cl, boolean googlePlay) throws Exception {
+        final BubbleComposeRuntime runtime =
+                new BubbleComposeRuntime(cl, new BubbleHostMapping(googlePlay));
+
+        Method userBubble = findBubbleMethod(
+                cl.loadClass(runtime.mapping.userOwner),
+                runtime.mapping.userMethod, HostCompat.isV241() ? 10 : 8,
+                new int[]{0, HostCompat.isV241() ? 2 : 1},
+                new Class<?>[]{String.class, runtime.modifierClass});
+        Method assistantBody = findBubbleMethod(
+                cl.loadClass(runtime.mapping.assistantBodyOwner),
+                runtime.mapping.assistantBodyMethod, 12,
+                new int[]{8}, new Class<?>[]{runtime.modifierClass});
+        Method assistantContentBox = null;
+        if (HostCompat.isV241()) {
+            assistantContentBox = findBubbleMethod(
+                    cl.loadClass("y32"), "c", 11,
+                    new int[]{1}, new Class<?>[]{runtime.modifierClass});
+        } else if (HostCompat.isV236()) {
+            assistantContentBox = findBubbleMethod(
+                    cl.loadClass("no9"), "b", 11,
+                    new int[]{1}, new Class<?>[]{runtime.modifierClass});
+        }
+        Method inputContainer = findBubbleMethod(
+                cl.loadClass(runtime.mapping.inputOwner),
+                runtime.mapping.inputMethod, 9,
+                new int[]{6}, new Class<?>[]{runtime.modifierClass});
+        Method conversationSearch = findBubbleMethod(
+                cl.loadClass(runtime.mapping.searchOwner),
+                runtime.mapping.searchMethod, 9,
+                new int[]{0}, new Class<?>[]{runtime.modifierClass});
+        Method attachmentItem = findBubbleMethod(
+                cl.loadClass(runtime.mapping.attachmentOwner),
+                runtime.mapping.attachmentMethod,
+                (HostCompat.isV236() || HostCompat.isV241()) ? 10 : 5,
+                new int[]{(HostCompat.isV236() || HostCompat.isV241()) ? 0 : 1},
+                new Class<?>[]{runtime.modifierClass});
+        Method modeItem = findBubbleMethod(
+                cl.loadClass(runtime.mapping.modeItemOwner),
+                runtime.mapping.modeItemMethod, 11,
+                new int[]{0, 2, 8},
+                new Class<?>[]{String.class, boolean.class, runtime.modifierClass});
+        Method modeContainer = findBubbleMethod(
+                cl.loadClass(runtime.mapping.modeContainerOwner),
+                runtime.mapping.modeContainerMethod, 7,
+                new int[]{0, 1},
+                new Class<?>[]{runtime.modifierClass, boolean.class});
+
+        deoptimizeBubbleMethod(userBubble);
+        deoptimizeBubbleMethod(assistantBody);
+        deoptimizeBubbleMethod(assistantContentBox);
+        deoptimizeBubbleMethod(inputContainer);
+        deoptimizeBubbleMethod(conversationSearch);
+        deoptimizeBubbleMethod(attachmentItem);
+        deoptimizeBubbleMethod(modeItem);
+        deoptimizeBubbleMethod(modeContainer);
+        deoptimizeBubbleMethod(runtime.clipMethod);
+        deoptimizeBubbleMethod(runtime.backgroundMethod);
+        try {
+            Class<?> restart = cl.loadClass(runtime.mapping.assistantRestartOwner);
+            for (Method method : restart.getDeclaredMethods()) {
+                deoptimizeBubbleMethod(method);
+            }
+        } catch (Throwable t) {
+            Main.log("bubble restart deopt skipped: " + t);
+        }
+
+        Main.MODULE.hook(userBubble).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                ChatAppearance.BubbleStyle style =
+                        ChatAppearance.bubbleStyleForRender(true);
+                // A null style means the appearance master switch or bubble customization is off.
+                // Passing the host Modifier through untouched is important: BubbleStyle's normal
+                // defaults are glass, so manufacturing a fallback here used to draw a phantom
+                // bubble even though the user had disabled the whole appearance page.
+                if (style == null) return chain.proceed();
+                BubbleRenderContext context =
+                        runtime.newContext(style, true, isBubbleDark());
+                Object[] args = chain.getArgs().toArray();
+                // The host calculates the final bubble width later, immediately before clip().
+                // Keep the entry Modifier untouched so borders do not accidentally use the
+                // larger message-row bounds; force this composition body to visit that node.
+                int changedFlagsIndex = HostCompat.isV241() ? 8 : 6;
+                args[changedFlagsIndex] =
+                        ((Number) args[changedFlagsIndex]).intValue() | 0x4;
+                BubbleRenderContext previous = BUBBLE_RENDER_CONTEXT.get();
+                BUBBLE_RENDER_CONTEXT.set(context);
+                try {
+                    return chain.proceed(args);
+                } finally {
+                    restoreBubbleContext(previous);
+                }
+            }
+        });
+
+        Main.MODULE.hook(runtime.clipMethod).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                BubbleRenderContext context = BUBBLE_RENDER_CONTEXT.get();
+                if (context == null || !context.user) {
+                    return chain.proceed();
+                }
+                Object[] args = chain.getArgs().toArray();
+                if (!context.userModifierApplied) {
+                    context.userModifierApplied = true;
+                    args[0] = runtime.decorateModifier(args[0], context);
+                }
+                if (context.customSurface) args[1] = context.shape;
+                return chain.proceed(args);
+            }
+        });
+
+        Main.MODULE.hook(runtime.backgroundMethod).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                InputGlassContext input = INPUT_GLASS_CONTEXT.get();
+                if (input != null && "Attachment".equals(input.label)
+                        && !input.modifierApplied) {
+                    Object result = chain.proceed();
+                    input.modifierApplied = true;
+                    return runtime.attachBoundsModifier(
+                            result, input.surface, input.label);
+                }
+                BubbleRenderContext context = BUBBLE_RENDER_CONTEXT.get();
+                if (context == null || !context.user || !context.customSurface) {
+                    return chain.proceed();
+                }
+                Object[] args = chain.getArgs().toArray();
+                args[1] = context.fillColor;
+                args[2] = context.shape;
+                return chain.proceed(args);
+            }
+        });
+
+        // The assistant has no native bubble. Its outer response composable also owns the
+        // copy/like/dislike row, so that container is only used to scope discovery of the real
+        // body node; it must never be painted as a bubble itself.
+        Main.MODULE.hook(assistantBody).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                ChatAppearance.BubbleStyle style =
+                        ChatAppearance.bubbleStyleForRender(false);
+                // DeepSeek responses do not have a native outer bubble. Never decorate the broad
+                // response container when customization is inactive; in dark mode that accidental
+                // background appeared as a visibly offset slab below the answer.
+                if (style == null) return chain.proceed();
+                BubbleRenderContext context =
+                        runtime.newContext(style, false, isBubbleDark());
+                BubbleRenderContext previous = BUBBLE_RENDER_CONTEXT.get();
+                BUBBLE_RENDER_CONTEXT.set(context);
+                try {
+                    return chain.proceed();
+                } finally {
+                    restoreBubbleContext(previous);
+                }
+            }
+        });
+
+        if (assistantContentBox != null) {
+            Main.MODULE.hook(assistantContentBox).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    BubbleRenderContext context = BUBBLE_RENDER_CONTEXT.get();
+                    if (context == null || context.user
+                            || context.assistantModifierApplied) {
+                        return chain.proceed();
+                    }
+                    Object[] args = chain.getArgs().toArray();
+                    context.assistantModifierApplied = true;
+                    args[1] = runtime.decorateAssistantModifier(args[1], context);
+                    return chain.proceed(args);
+                }
+            });
+        }
+
+        Main.MODULE.hook(inputContainer).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                boolean glass = ChatAppearance.glassEnabledForRender();
+                LiquidGlassEngine.SurfaceHandle surface = null;
+                if (glass) {
+                    // The mode list and input box are sibling compositions. Clearing mode records
+                    // here races with p35.e/ds5.t and erases the selector immediately after it was
+                    // registered. Each mode-list pass now owns its own generation below.
+                    LiquidGlassEngine.clearSurfaceKinds(
+                            LiquidGlassEngine.KIND_INPUT);
+                    surface = LiquidGlassEngine.registerSurface(
+                            LiquidGlassEngine.KIND_INPUT, 22f);
+                }
+                Object[] args = chain.getArgs().toArray();
+                args[6] = runtime.decorateInputModifier(
+                        args[6], isBubbleDark(), surface);
+                return chain.proceed(args);
+            }
+        });
+
+        Main.MODULE.hook(conversationSearch).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                if (!ChatAppearance.glassEnabledForRender()) {
+                    return chain.proceed();
+                }
+                LiquidGlassEngine.clearSurfaceKinds(
+                        LiquidGlassEngine.KIND_SIDEBAR_SEARCH);
+                LiquidGlassEngine.SurfaceHandle surface =
+                        LiquidGlassEngine.registerSurface(
+                                LiquidGlassEngine.KIND_SIDEBAR_SEARCH, 16f);
+                Object[] args = chain.getArgs().toArray();
+                args[0] = runtime.decorateSearchModifier(
+                        args[0], isBubbleDark(), surface);
+                return chain.proceed(args);
+            }
+        });
+
+        Main.MODULE.hook(modeItem).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                if (!ChatAppearance.glassEnabledForRender()) {
+                    return chain.proceed();
+                }
+                Object[] args = chain.getArgs().toArray();
+                boolean selected = Boolean.TRUE.equals(args[2]);
+                int index = ((Number) args[4]).intValue();
+                if (index == 0) {
+                    LiquidGlassEngine.clearSurfaceKinds(
+                            LiquidGlassEngine.KIND_MODE_ITEM,
+                            LiquidGlassEngine.KIND_MODE_SELECTED);
+                }
+                LiquidGlassEngine.SurfaceHandle surface =
+                        LiquidGlassEngine.registerSurface(
+                                selected
+                                        ? LiquidGlassEngine.KIND_MODE_SELECTED
+                                        : LiquidGlassEngine.KIND_MODE_ITEM,
+                                13f);
+                ModeGlassContext previous = MODE_GLASS_CONTEXT.get();
+                MODE_GLASS_CONTEXT.set(
+                        new ModeGlassContext(
+                                selected, isBubbleDark(), surface));
+                try {
+                    return chain.proceed(args);
+                } finally {
+                    if (previous == null) MODE_GLASS_CONTEXT.remove();
+                    else MODE_GLASS_CONTEXT.set(previous);
+                }
+            }
+        });
+
+        // p35.e/ds5.t ignores its nullable Modifier argument and constructs the actual clickable
+        // item with i39.S/av9.k0. Decorate that returned Modifier: it is below both text passes,
+        // follows Compose scrolling, and supplies the exact bounds to the refracting layer.
+        Main.MODULE.hook(modeContainer).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                ModeGlassContext context = MODE_GLASS_CONTEXT.get();
+                if (context == null || context.modifierApplied) {
+                    return chain.proceed();
+                }
+                Object result = chain.proceed();
+                context.modifierApplied = true;
+                result = runtime.decorateModeModifier(
+                        result, context.selected, context.dark);
+                return runtime.attachBoundsModifier(
+                        result, context.surface,
+                        context.selected ? "ModeSelected" : "Mode");
+            }
+        });
+
+        Main.MODULE.hook(attachmentItem).intercept(new Hooker() {
+            @Override public Object intercept(Chain chain) throws Throwable {
+                if (!ChatAppearance.glassEnabledForRender()) {
+                    return chain.proceed();
+                }
+                LiquidGlassEngine.SurfaceHandle surface =
+                        LiquidGlassEngine.registerSurface(
+                                LiquidGlassEngine.KIND_ATTACHMENT, 16f);
+                if (surface == null) return chain.proceed();
+                InputGlassContext previous = INPUT_GLASS_CONTEXT.get();
+                INPUT_GLASS_CONTEXT.set(
+                        new InputGlassContext(surface, "Attachment"));
+                try {
+                    return chain.proceed();
+                } finally {
+                    if (previous == null) INPUT_GLASS_CONTEXT.remove();
+                    else INPUT_GLASS_CONTEXT.set(previous);
+                }
+            }
+        });
+
+        Main.log("installed chat bubble customization ("
+                + (googlePlay ? "google-play" : "mainland")
+                + "), lifecycle-bound input/search/mode glass and attachment glass enabled");
+    }
+
+    private boolean isBubbleDark() {
+        Activity activity = Main.MODULE.curAct.get();
+        if (activity != null) {
+            try { return DeePXUi.isDark(activity); }
+            catch (Throwable ignored) {}
+        }
+        try {
+            int mode = android.content.res.Resources.getSystem()
+                    .getConfiguration().uiMode
+                    & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+            return mode == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private void deoptimizeBubbleMethod(Method method) {
+        if (method == null) return;
+        try {
+            method.setAccessible(true);
+            Main.MODULE.deoptimize(method);
+        } catch (Throwable t) {
+            Main.log("bubble deopt failed " + method + ": " + t);
+        }
+    }
+
+    private static void restoreBubbleContext(BubbleRenderContext previous) {
+        if (previous == null) BUBBLE_RENDER_CONTEXT.remove();
+        else BUBBLE_RENDER_CONTEXT.set(previous);
+    }
+
+    private static Method findBubbleMethod(
+            Class<?> owner, String name, int parameterCount,
+            int[] typeIndexes, Class<?>[] expectedTypes) throws NoSuchMethodException {
+        for (Method method : owner.getDeclaredMethods()) {
+            if (!name.equals(method.getName())
+                    || method.getParameterTypes().length != parameterCount) {
+                continue;
+            }
+            Class<?>[] actual = method.getParameterTypes();
+            boolean matches = true;
+            if (typeIndexes != null && expectedTypes != null) {
+                for (int i = 0; i < typeIndexes.length; i++) {
+                    if (actual[typeIndexes[i]] != expectedTypes[i]) {
+                        matches = false;
+                        break;
+                    }
+                }
+            }
+            if (matches) {
+                method.setAccessible(true);
+                return method;
+            }
+        }
+        throw new NoSuchMethodException(owner.getName() + "." + name
+                + "/" + parameterCount);
+    }
+
+    private static final class BubbleHostMapping {
+        final boolean googlePlay;
+        final String userOwner;
+        final String userMethod;
+        final String assistantBodyOwner;
+        final String assistantBodyMethod;
+        final String assistantOuterOwner;
+        final String assistantOuterMethod;
+        final String assistantResolvedOwner;
+        final String assistantResolvedMethod;
+        final String assistantRestartOwner;
+        final String surfaceOwner;
+        final String surfaceMethod;
+        final String modifierClass;
+        final String callbackClass;
+        final String shapeClass;
+        final String roundedOwner;
+        final String roundedMethod;
+        final String clipOwner;
+        final String clipMethod;
+        final String backgroundOwner;
+        final String backgroundMethod;
+        final String borderOwner;
+        final String borderMethod;
+        final String drawOwner;
+        final String drawMethod;
+        final String imageClass;
+        final String drawScopeClass;
+        final String drawImageMethod;
+        final String unitClass;
+        final String unitField;
+        final String attachmentOwner;
+        final String attachmentMethod;
+        final String inputOwner;
+        final String inputMethod;
+        final String searchOwner;
+        final String searchMethod;
+        final String modeItemOwner;
+        final String modeItemMethod;
+        final String modeLabelOwner;
+        final String modeLabelMethod;
+        final String modeContainerOwner;
+        final String modeContainerMethod;
+        final String positionElementClass;
+        final String coordinatesClass;
+        final String coordinatesAttachedMethod;
+        final String coordinatesSizeMethod;
+        final String coordinatesWindowMethod;
+        final String spatialElementClass;
+        final String spatialScopeClass;
+        final String spatialStateClass;
+        final String spatialStatePolicyOwner;
+        final String spatialStatePolicyField;
+        final String spatialScaleXMethod;
+        final String spatialScaleYMethod;
+        final String spatialTranslationXMethod;
+        final String spatialTranslationYMethod;
+        final String spatialRotationXMethod;
+
+        BubbleHostMapping(boolean googlePlay) {
+            this.googlePlay = googlePlay;
+            if (HostCompat.isV241()) {
+                userOwner = "ac5";
+                userMethod = "b";
+                assistantBodyOwner = "cw9";
+                assistantBodyMethod = "a";
+                assistantOuterOwner = "lr9";
+                assistantOuterMethod = "h0";
+                assistantResolvedOwner = "lr9";
+                assistantResolvedMethod = "h0";
+                assistantRestartOwner = "gu";
+                surfaceOwner = "mt4";
+                surfaceMethod = "g";
+                modifierClass = "mv5";
+                callbackClass = "tl3";
+                shapeClass = "sw7";
+                roundedOwner = "jg7";
+                roundedMethod = "a";
+                clipOwner = "mba";
+                clipMethod = "u";
+                backgroundOwner = "bu9";
+                backgroundMethod = "x";
+                borderOwner = "h19";
+                borderMethod = "x";
+                drawOwner = "gca";
+                drawMethod = "J";
+                imageClass = "ne";
+                drawScopeClass = "vy4";
+                drawImageMethod = "k0";
+                unitClass = "d39";
+                unitField = "a";
+                attachmentOwner = "zb5";
+                attachmentMethod = "h";
+                inputOwner = "h19";
+                inputMethod = "i";
+                searchOwner = "wc";
+                searchMethod = "X";
+                modeItemOwner = "hc5";
+                modeItemMethod = "a";
+                modeLabelOwner = "hc5";
+                modeLabelMethod = "a";
+                modeContainerOwner = "lr9";
+                modeContainerMethod = "h0";
+                positionElementClass = "qb6";
+                coordinatesClass = "ey4";
+                coordinatesAttachedMethod = "g";
+                coordinatesSizeMethod = "i";
+                coordinatesWindowMethod = "q";
+                spatialElementClass = "bh0";
+                spatialScopeClass = "ze7";
+                spatialStateClass = "kj6";
+                spatialStatePolicyOwner = "aca";
+                spatialStatePolicyField = "t";
+                spatialScaleXMethod = "i";
+                spatialScaleYMethod = "j";
+                spatialTranslationXMethod = "r";
+                spatialTranslationYMethod = "u";
+                spatialRotationXMethod = "g";
+            } else if (HostCompat.isV236()) {
+                userOwner = "qb5";
+                userMethod = "e";
+                assistantBodyOwner = "qz5";
+                assistantBodyMethod = "a";
+                assistantOuterOwner = "qs8";
+                assistantOuterMethod = "w0";
+                assistantResolvedOwner = "qs8";
+                assistantResolvedMethod = "w0";
+                assistantRestartOwner = "bu";
+                surfaceOwner = "fh0";
+                surfaceMethod = "a";
+                modifierClass = "sp5";
+                callbackClass = "ch3";
+                shapeClass = "ro7";
+                roundedOwner = "j97";
+                roundedMethod = "a";
+                clipOwner = "od2";
+                clipMethod = "u";
+                backgroundOwner = "wf9";
+                backgroundMethod = "z";
+                borderOwner = "od2";
+                borderMethod = "r";
+                drawOwner = "zd9";
+                drawMethod = "J";
+                imageClass = "je";
+                drawScopeClass = "kt4";
+                drawImageMethod = "g";
+                unitClass = "mu8";
+                unitField = "a";
+                attachmentOwner = "oa5";
+                attachmentMethod = "m";
+                inputOwner = "l42";
+                inputMethod = "a";
+                searchOwner = "co4";
+                searchMethod = "n";
+                modeItemOwner = "sc5";
+                modeItemMethod = "a";
+                modeLabelOwner = "sc5";
+                modeLabelMethod = "a";
+                modeContainerOwner = "qs8";
+                modeContainerMethod = "w0";
+                positionElementClass = "q56";
+                coordinatesClass = "ts4";
+                coordinatesAttachedMethod = "h";
+                coordinatesSizeMethod = "j";
+                coordinatesWindowMethod = "r";
+                spatialElementClass = "bg0";
+                spatialScopeClass = "z77";
+                spatialStateClass = "hd6";
+                spatialStatePolicyOwner = "c3a";
+                spatialStatePolicyField = "t";
+                spatialScaleXMethod = "j";
+                spatialScaleYMethod = "k";
+                spatialTranslationXMethod = "s";
+                spatialTranslationYMethod = "u";
+                spatialRotationXMethod = "h";
+            } else if (googlePlay && HostCompat.isV234()) {
+                // Google Play 2.3.4 (code 246).  This table is derived from the actually
+                // installed split APK, not from the similarly-versioned mainland build.  R8
+                // reused several old names for unrelated SDK classes, so carrying the 2.2 table
+                // forward (for example xz9/w3a/m27) silently targeted the wrong code.
+                userOwner = "pi6";
+                userMethod = "c";
+                assistantBodyOwner = "ala";
+                assistantBodyMethod = "a";
+                assistantOuterOwner = "lw8";
+                assistantOuterMethod = "Y";
+                assistantResolvedOwner = "lw8";
+                assistantResolvedMethod = "Y";
+                assistantRestartOwner = "fu";
+                surfaceOwner = "bz7";
+                surfaceMethod = "a";
+                modifierClass = "zq5";
+                callbackClass = "xi3";
+                shapeClass = "fs7";
+                roundedOwner = "kc7";
+                roundedMethod = "a";
+                clipOwner = "rv1";
+                clipMethod = "T";
+                backgroundOwner = "zh9";
+                backgroundMethod = "z";
+                borderOwner = "n86";
+                borderMethod = "Y";
+                drawOwner = "rv1";
+                drawMethod = "Y";
+                imageClass = "me";
+                drawScopeClass = "iv4";
+                drawImageMethod = "f";
+                unitClass = "hy8";
+                unitField = "a";
+                attachmentOwner = "pf6";
+                attachmentMethod = "j";
+                inputOwner = "y52";
+                inputMethod = "d";
+                searchOwner = "c16";
+                searchMethod = "s";
+                modeItemOwner = "p7a";
+                modeItemMethod = "f";
+                modeLabelOwner = "p7a";
+                modeLabelMethod = "h";
+                modeContainerOwner = "lw8";
+                modeContainerMethod = "Y";
+                positionElementClass = "e76";
+                coordinatesClass = "ru4";
+                coordinatesAttachedMethod = "h";
+                coordinatesSizeMethod = "j";
+                coordinatesWindowMethod = "r";
+                spatialElementClass = "rh0";
+                spatialScopeClass = "ab7";
+                spatialStateClass = "we6";
+                spatialStatePolicyOwner = "h7a";
+                spatialStatePolicyField = "t";
+                spatialScaleXMethod = "j";
+                spatialScaleYMethod = "k";
+                spatialTranslationXMethod = "t";
+                spatialTranslationYMethod = "v";
+                spatialRotationXMethod = "h";
+            } else if (googlePlay) {
+                userOwner = "xz9";
+                userMethod = "c";
+                assistantBodyOwner = "w3a";
+                assistantBodyMethod = "b";
+                assistantOuterOwner = "be4";
+                assistantOuterMethod = "g";
+                assistantResolvedOwner = "be4";
+                assistantResolvedMethod = "f";
+                assistantRestartOwner = "jt";
+                surfaceOwner = "mz5";
+                surfaceMethod = "F";
+                modifierClass = "ci5";
+                callbackClass = "kd3";
+                shapeClass = "yh7";
+                roundedOwner = "m27";
+                roundedMethod = "a";
+                clipOwner = "fa9";
+                clipMethod = "F";
+                backgroundOwner = "t59";
+                backgroundMethod = "n";
+                borderOwner = "u55";
+                borderMethod = "o";
+                drawOwner = "m12";
+                drawMethod = "B";
+                imageClass = "fe";
+                drawScopeClass = "yo4";
+                drawImageMethod = "f";
+                unitClass = "vm8";
+                unitField = "a";
+                attachmentOwner = "ph6";
+                attachmentMethod = "e";
+                inputOwner = "oo0";
+                inputMethod = "d";
+                searchOwner = "g54";
+                searchMethod = "m";
+                modeItemOwner = "ds5";
+                modeItemMethod = "t";
+                modeLabelOwner = "ds5";
+                modeLabelMethod = "v";
+                modeContainerOwner = "av9";
+                modeContainerMethod = "k0";
+                positionElementClass = "dy5";
+                coordinatesClass = "ho4";
+                coordinatesAttachedMethod = "h";
+                coordinatesSizeMethod = "j";
+                coordinatesWindowMethod = "t";
+                spatialElementClass = "bg0";
+                spatialScopeClass = "b17";
+                spatialStateClass = "v56";
+                spatialStatePolicyOwner = "nr9";
+                spatialStatePolicyField = "Y";
+                spatialScaleXMethod = "j";
+                spatialScaleYMethod = "k";
+                spatialTranslationXMethod = "w";
+                spatialTranslationYMethod = "x";
+                spatialRotationXMethod = "h";
+            } else if (HostCompat.isV234()) {
+                // Mainland 2.3.4 (code 245).  The store channels use independent R8 maps,
+                // while sharing the same Compose contracts and feature implementation.
+                userOwner = "ic5";
+                userMethod = "e";
+                assistantBodyOwner = "hz5";
+                assistantBodyMethod = "a";
+                assistantOuterOwner = "sq8";
+                assistantOuterMethod = "r0";
+                assistantResolvedOwner = "sq8";
+                assistantResolvedMethod = "r0";
+                assistantRestartOwner = "bu";
+                surfaceOwner = "sc";
+                surfaceMethod = "a";
+                modifierClass = "lp5";
+                callbackClass = "tg3";
+                shapeClass = "ko7";
+                roundedOwner = "b97";
+                roundedMethod = "a";
+                clipOwner = "d42";
+                clipMethod = "r";
+                backgroundOwner = "qf9";
+                backgroundMethod = "F";
+                borderOwner = "d42";
+                borderMethod = "o";
+                drawOwner = "td9";
+                drawMethod = "L";
+                imageClass = "je";
+                drawScopeClass = "bt4";
+                drawImageMethod = "g";
+                unitClass = "fu8";
+                unitField = "a";
+                attachmentOwner = "ra5";
+                attachmentMethod = "m";
+                inputOwner = "f02";
+                inputMethod = "a";
+                searchOwner = "sh4";
+                searchMethod = "p";
+                modeItemOwner = "oc5";
+                modeItemMethod = "c";
+                modeLabelOwner = "oc5";
+                modeLabelMethod = "c";
+                modeContainerOwner = "sq8";
+                modeContainerMethod = "r0";
+                positionElementClass = "i56";
+                coordinatesClass = "ks4";
+                coordinatesAttachedMethod = "h";
+                coordinatesSizeMethod = "j";
+                coordinatesWindowMethod = "q";
+                spatialElementClass = "bg0";
+                spatialScopeClass = "r77";
+                spatialStateClass = "ad6";
+                spatialStatePolicyOwner = "v2a";
+                spatialStatePolicyField = "t";
+                spatialScaleXMethod = "j";
+                spatialScaleYMethod = "k";
+                spatialTranslationXMethod = "s";
+                spatialTranslationYMethod = "u";
+                spatialRotationXMethod = "h";
+            } else if (HostCompat.isV230()) {
+                // DeepSeek 2.3.0 upgraded Compose and R8 split several helpers that lived in
+                // large 2.2.x utility classes.  Keep this mapping separate from the legacy
+                // mainland table so one module APK can safely drive both host generations.
+                userOwner = "g55";
+                userMethod = "d";
+                assistantBodyOwner = "le4";
+                assistantBodyMethod = "d";
+                assistantOuterOwner = "zj8";
+                assistantOuterMethod = "M";
+                assistantResolvedOwner = "zj8";
+                assistantResolvedMethod = "M";
+                assistantRestartOwner = "qt";
+                surfaceOwner = "kt9";
+                surfaceMethod = "b";
+                modifierClass = "lj5";
+                callbackClass = "td3";
+                shapeClass = "ch7";
+                roundedOwner = "y17";
+                roundedMethod = "a";
+                clipOwner = "nn0";
+                clipMethod = "D";
+                backgroundOwner = "vd0";
+                backgroundMethod = "j";
+                borderOwner = "cs1";
+                borderMethod = "C";
+                drawOwner = "vd0";
+                drawMethod = "t";
+                imageClass = "je";
+                drawScopeClass = "hp4";
+                drawImageMethod = "f";
+                unitClass = "vl8";
+                unitField = "a";
+                attachmentOwner = "ab5";
+                attachmentMethod = "f";
+                inputOwner = "nn0";
+                inputMethod = "a";
+                searchOwner = "ky1";
+                searchMethod = "q";
+                modeItemOwner = "j65";
+                modeItemMethod = "b";
+                modeLabelOwner = "j65";
+                modeLabelMethod = "d";
+                modeContainerOwner = "zj8";
+                modeContainerMethod = "M";
+                positionElementClass = "fz5";
+                coordinatesClass = "qo4";
+                coordinatesAttachedMethod = "h";
+                coordinatesSizeMethod = "j";
+                coordinatesWindowMethod = "q";
+                spatialElementClass = "bf0";
+                spatialScopeClass = "o07";
+                spatialStateClass = "w66";
+                spatialStatePolicyOwner = "yt9";
+                spatialStatePolicyField = "t";
+                spatialScaleXMethod = "j";
+                spatialScaleYMethod = "k";
+                spatialTranslationXMethod = "s";
+                spatialTranslationYMethod = "t";
+                spatialRotationXMethod = "h";
+            } else {
+                userOwner = "dc5";
+                userMethod = "c";
+                assistantBodyOwner = "vh4";
+                assistantBodyMethod = "f";
+                assistantOuterOwner = "i39";
+                assistantOuterMethod = "d";
+                assistantResolvedOwner = "i39";
+                assistantResolvedMethod = "c";
+                assistantRestartOwner = "gt";
+                surfaceOwner = "uq9";
+                surfaceMethod = "h";
+                modifierClass = "qg5";
+                callbackClass = "ib3";
+                shapeClass = "fe7";
+                roundedOwner = "fz6";
+                roundedMethod = "a";
+                clipOwner = "uf0";
+                clipMethod = "y";
+                backgroundOwner = "i39";
+                backgroundMethod = "u";
+                borderOwner = "zp1";
+                borderMethod = "o";
+                drawOwner = "ld0";
+                drawMethod = "A";
+                imageClass = "ce";
+                drawScopeClass = "sm4";
+                drawImageMethod = "h";
+                unitClass = HostCompat.unitClass();
+                unitField = HostCompat.unitField();
+                attachmentOwner = "i85";
+                attachmentMethod = "g";
+                inputOwner = "uf0";
+                inputMethod = "b";
+                searchOwner = "fq1";
+                searchMethod = "k";
+                modeItemOwner = "p35";
+                modeItemMethod = "e";
+                modeLabelOwner = "p35";
+                modeLabelMethod = "g";
+                modeContainerOwner = "i39";
+                modeContainerMethod = "S";
+                positionElementClass = "lw5";
+                coordinatesClass = "bm4";
+                coordinatesAttachedMethod = "i";
+                coordinatesSizeMethod = "k";
+                coordinatesWindowMethod = "t";
+                spatialElementClass = "re0";
+                spatialScopeClass = "ux6";
+                spatialStateClass = "c46";
+                spatialStatePolicyOwner = "gn9";
+                spatialStatePolicyField = "X";
+                spatialScaleXMethod = "k";
+                spatialScaleYMethod = "m";
+                spatialTranslationXMethod = "u";
+                spatialTranslationYMethod = "w";
+                spatialRotationXMethod = "i";
+            }
+        }
+    }
+
+    private static final class InputGlassContext {
+        final LiquidGlassEngine.SurfaceHandle surface;
+        final String label;
+        boolean modifierApplied;
+
+        InputGlassContext(
+                LiquidGlassEngine.SurfaceHandle surface, String label) {
+            this.surface = surface;
+            this.label = label;
+        }
+    }
+
+    private static final class ModeGlassContext {
+        final boolean selected;
+        final boolean dark;
+        final LiquidGlassEngine.SurfaceHandle surface;
+        boolean modifierApplied;
+
+        ModeGlassContext(
+                boolean selected, boolean dark,
+                LiquidGlassEngine.SurfaceHandle surface) {
+            this.selected = selected;
+            this.dark = dark;
+            this.surface = surface;
+        }
+    }
+
+    private static final class BubbleRenderContext {
+        final ChatAppearance.BubbleStyle style;
+        final boolean user;
+        final boolean customSurface;
+        final Object shape;
+        final long fillColor;
+        final long borderColor;
+        final LiquidGlassEngine.SurfaceHandle glassSurface;
+        boolean userModifierApplied;
+        boolean assistantModifierApplied;
+
+        BubbleRenderContext(
+                ChatAppearance.BubbleStyle style, boolean user,
+                boolean customSurface, Object shape,
+                long fillColor, long borderColor,
+                LiquidGlassEngine.SurfaceHandle glassSurface) {
+            this.style = style;
+            this.user = user;
+            this.customSurface = customSurface;
+            this.shape = shape;
+            this.fillColor = fillColor;
+            this.borderColor = borderColor;
+            this.glassSurface = glassSurface;
+        }
+    }
+
+    private static final class BubbleComposeRuntime {
+        private static final int SPATIAL_USER = 1;
+        private static final int SPATIAL_ASSISTANT = 2;
+        private static final int SPATIAL_INPUT = 3;
+
+        final ClassLoader classLoader;
+        final BubbleHostMapping mapping;
+        final Class<?> modifierClass;
+        final Class<?> callbackClass;
+        final Class<?> shapeClass;
+        final Method roundedMethod;
+        final Method clipMethod;
+        final Method backgroundMethod;
+        final Method borderMethod;
+        final Method drawWithContentMethod;
+        final Method wrapContentSizeMethod;
+        final Method paddingMethod;
+        final Constructor<?> imageConstructor;
+        final Method drawContentMethod;
+        final Method drawSizeMethod;
+        final Method densityMethod;
+        final Method drawImageMethod;
+        final Constructor<?> positionElementConstructor;
+        final Method modifierThenMethod;
+        final Method coordinatesAttachedMethod;
+        final Method coordinatesSizeMethod;
+        final Method coordinatesWindowMethod;
+        final Object unit;
+        Constructor<?> spatialElementConstructor;
+        Object spatialState;
+        Method spatialStateGetValue;
+        Method spatialStateSetValue;
+        Method spatialScopeDensity;
+        Method spatialScaleX;
+        Method spatialScaleY;
+        Method spatialTranslationX;
+        Method spatialTranslationY;
+        Method spatialRotationX;
+        final Object[] spatialElements = new Object[4];
+        ChatAppearance.SpatialPoseListener spatialPoseListener;
+        boolean inputCoordinateProbeLogged;
+        boolean inputLocalGlassLogged;
+        boolean searchLocalGlassLogged;
+        boolean modeLocalGlassLogged;
+        boolean assistantModifierLogged;
+        boolean assistantActionStateFailureLogged;
+        boolean spatialLayerFailureLogged;
+        int spatialLayerAppliedMask;
+
+        BubbleComposeRuntime(
+                ClassLoader classLoader, BubbleHostMapping mapping) throws Exception {
+            this.classLoader = classLoader;
+            this.mapping = mapping;
+            modifierClass = classLoader.loadClass(mapping.modifierClass);
+            callbackClass = classLoader.loadClass(mapping.callbackClass);
+            shapeClass = classLoader.loadClass(mapping.shapeClass);
+            roundedMethod = classLoader.loadClass(mapping.roundedOwner)
+                    .getDeclaredMethod(mapping.roundedMethod, float.class);
+            clipMethod = classLoader.loadClass(mapping.clipOwner)
+                    .getDeclaredMethod(mapping.clipMethod, modifierClass, shapeClass);
+            backgroundMethod = classLoader.loadClass(mapping.backgroundOwner)
+                    .getDeclaredMethod(
+                            mapping.backgroundMethod,
+                            modifierClass, long.class, shapeClass);
+            borderMethod = classLoader.loadClass(mapping.borderOwner)
+                    .getDeclaredMethod(
+                            mapping.borderMethod,
+                            modifierClass, float.class, long.class, shapeClass);
+            drawWithContentMethod = classLoader.loadClass(mapping.drawOwner)
+                    .getDeclaredMethod(
+                            mapping.drawMethod, modifierClass, callbackClass);
+            Method wrapContent = null;
+            Method padding = null;
+            if (HostCompat.isV241()) {
+                try {
+                    Class<?> sizeKt = classLoader.loadClass("y48");
+                    wrapContent = sizeKt.getDeclaredMethod("v", modifierClass);
+                    padding = sizeKt.getDeclaredMethod(
+                            "p", modifierClass, float.class, float.class,
+                            float.class, float.class);
+                    wrapContent.setAccessible(true);
+                    padding.setAccessible(true);
+                } catch (Throwable t) {
+                    Main.log("adaptive assistant bubble sizing unavailable: " + t);
+                }
+            } else if (HostCompat.isV236()) {
+                try {
+                    Class<?> sizeKt = classLoader.loadClass("lw7");
+                    wrapContent = sizeKt.getDeclaredMethod("t", modifierClass);
+                    padding = sizeKt.getDeclaredMethod(
+                            "n", modifierClass, float.class, float.class,
+                            float.class, float.class);
+                    wrapContent.setAccessible(true);
+                    padding.setAccessible(true);
+                } catch (Throwable t) {
+                    Main.log("adaptive assistant bubble sizing unavailable: " + t);
+                }
+            }
+            wrapContentSizeMethod = wrapContent;
+            paddingMethod = padding;
+            imageConstructor = classLoader.loadClass(mapping.imageClass)
+                    .getDeclaredConstructor(android.graphics.Bitmap.class);
+            Class<?> drawScope = classLoader.loadClass(mapping.drawScopeClass);
+            drawContentMethod = drawScope.getDeclaredMethod("a");
+            drawSizeMethod = drawScope.getDeclaredMethod(
+                    HostCompat.isV234() && !mapping.googlePlay ? "b" : "d");
+            densityMethod = drawScope.getDeclaredMethod("getDensity");
+            drawImageMethod = findBubbleMethod(
+                    drawScope, mapping.drawImageMethod, 9, null, null);
+            Class<?> positionElementClass =
+                    classLoader.loadClass(mapping.positionElementClass);
+            positionElementConstructor =
+                    positionElementClass.getDeclaredConstructor(callbackClass);
+            modifierThenMethod = modifierClass.getMethod(
+                    HostCompat.isV234() ? (mapping.googlePlay ? "t" : "u")
+                            : (!mapping.googlePlay && HostCompat.isV230() ? "s" : "w"),
+                    modifierClass);
+            Class<?> coordinatesClass =
+                    classLoader.loadClass(mapping.coordinatesClass);
+            coordinatesAttachedMethod = coordinatesClass.getMethod(
+                    mapping.coordinatesAttachedMethod);
+            coordinatesSizeMethod = coordinatesClass.getMethod(
+                    mapping.coordinatesSizeMethod);
+            coordinatesWindowMethod = coordinatesClass.getMethod(
+                    mapping.coordinatesWindowMethod, long.class);
+            Field unitField = classLoader.loadClass(mapping.unitClass)
+                    .getDeclaredField(mapping.unitField);
+            unitField.setAccessible(true);
+            unit = unitField.get(null);
+            roundedMethod.setAccessible(true);
+            clipMethod.setAccessible(true);
+            backgroundMethod.setAccessible(true);
+            borderMethod.setAccessible(true);
+            drawWithContentMethod.setAccessible(true);
+            imageConstructor.setAccessible(true);
+            drawContentMethod.setAccessible(true);
+            drawSizeMethod.setAccessible(true);
+            densityMethod.setAccessible(true);
+            drawImageMethod.setAccessible(true);
+            positionElementConstructor.setAccessible(true);
+            modifierThenMethod.setAccessible(true);
+            coordinatesAttachedMethod.setAccessible(true);
+            coordinatesSizeMethod.setAccessible(true);
+            coordinatesWindowMethod.setAccessible(true);
+            // Foreground parallax is owned by one host View root. Do not register a per-frame
+            // Compose state listener or attach child graphicsLayer modifiers to chat/input nodes.
+            if (ChatAppearance.composeSpatialModifiersEnabled()) {
+                initializeSpatialRuntime();
+            }
+        }
+
+        private void initializeSpatialRuntime() {
+            try {
+                Class<?> elementClass =
+                        classLoader.loadClass(mapping.spatialElementClass);
+                spatialElementConstructor =
+                        elementClass.getDeclaredConstructor(callbackClass);
+                spatialElementConstructor.setAccessible(true);
+
+                Class<?> stateClass =
+                        classLoader.loadClass(mapping.spatialStateClass);
+                Field policyField = classLoader
+                        .loadClass(mapping.spatialStatePolicyOwner)
+                        .getDeclaredField(mapping.spatialStatePolicyField);
+                policyField.setAccessible(true);
+                Object policy = policyField.get(null);
+                Constructor<?> stateConstructor = null;
+                for (Constructor<?> candidate
+                        : stateClass.getDeclaredConstructors()) {
+                    Class<?>[] types = candidate.getParameterTypes();
+                    if (types.length == 2 && types[0] == Object.class
+                            && policy != null
+                            && types[1].isInstance(policy)) {
+                        stateConstructor = candidate;
+                        break;
+                    }
+                }
+                if (stateConstructor == null) {
+                    throw new NoSuchMethodException(
+                            stateClass.getName() + "(Object, policy)");
+                }
+                stateConstructor.setAccessible(true);
+                spatialState = stateConstructor.newInstance(
+                        ChatAppearance.currentSpatialPose(), policy);
+                spatialStateGetValue = stateClass.getMethod("getValue");
+                spatialStateSetValue =
+                        stateClass.getMethod("setValue", Object.class);
+
+                Class<?> scopeClass =
+                        classLoader.loadClass(mapping.spatialScopeClass);
+                spatialScopeDensity = scopeClass.getMethod("getDensity");
+                spatialScaleX = scopeClass.getMethod(
+                        mapping.spatialScaleXMethod, float.class);
+                spatialScaleY = scopeClass.getMethod(
+                        mapping.spatialScaleYMethod, float.class);
+                spatialTranslationX = scopeClass.getMethod(
+                        mapping.spatialTranslationXMethod, float.class);
+                spatialTranslationY = scopeClass.getMethod(
+                        mapping.spatialTranslationYMethod, float.class);
+                spatialRotationX = scopeClass.getMethod(
+                        mapping.spatialRotationXMethod, float.class);
+
+                spatialPoseListener =
+                        new ChatAppearance.SpatialPoseListener() {
+                            @Override public void onSpatialPose(
+                                    ChatAppearance.SpatialPose pose) {
+                                try {
+                                    spatialStateSetValue.invoke(
+                                            spatialState, pose);
+                                } catch (Throwable t) {
+                                    if (!spatialLayerFailureLogged) {
+                                        spatialLayerFailureLogged = true;
+                                        Main.log("spatial Compose state update failed: " + t);
+                                    }
+                                }
+                            }
+                        };
+                ChatAppearance.registerSpatialPoseListener(
+                        spatialPoseListener);
+                Main.log("spatial Compose layer ready ("
+                        + (mapping.googlePlay ? "google-play" : "mainland")
+                        + ")");
+            } catch (Throwable t) {
+                spatialElementConstructor = null;
+                spatialState = null;
+                Main.log("spatial Compose layer unavailable: " + t);
+            }
+        }
+
+        BubbleRenderContext newContext(
+                ChatAppearance.BubbleStyle style, boolean user, boolean dark)
+                throws Exception {
+            boolean custom = !"original".equals(style.preset);
+            Object shape = custom
+                    ? roundedMethod.invoke(null, style.radius)
+                    : null;
+            if (custom && shape == null) custom = false;
+            int fill = custom
+                    ? ChatAppearance.bubbleFillColor(style, user, dark)
+                    : 0;
+            int border = custom
+                    ? ChatAppearance.bubbleBorderColor(style, user, dark)
+                    : 0;
+            LiquidGlassEngine.SurfaceHandle glassSurface =
+                    ChatAppearance.glassEnabledForRender()
+                    ? LiquidGlassEngine.registerSurface(
+                            user ? LiquidGlassEngine.KIND_USER_BUBBLE
+                                    : LiquidGlassEngine.KIND_ASSISTANT_BUBBLE,
+                            style.radius)
+                    : null;
+            return new BubbleRenderContext(
+                    style, user, custom, shape,
+                    composeColor(fill), composeColor(border), glassSurface);
+        }
+
+        private Object attachSpatialModifier(
+                Object modifier, final int layerKind) {
+            if (modifier == null || !modifierClass.isInstance(modifier)
+                    || spatialElementConstructor == null
+                    || spatialState == null
+                    || layerKind <= 0 || layerKind >= spatialElements.length) {
+                return modifier;
+            }
+            // The single host Compose root is the coherent middle plane. Per-message graphics
+            // layers made scrolling conversations look gelatinous and prevented one clean
+            // foreground occlusion edge, so only the nearest input plane gets a local delta.
+            if (layerKind != SPATIAL_INPUT) return modifier;
+            try {
+                Object element = spatialElements[layerKind];
+                if (element == null) {
+                    synchronized (spatialElements) {
+                        element = spatialElements[layerKind];
+                        if (element == null) {
+                            Object callback = Proxy.newProxyInstance(
+                                    classLoader,
+                                    new Class<?>[]{callbackClass},
+                                    new InvocationHandler() {
+                                        @Override public Object invoke(
+                                                Object proxy, Method method,
+                                                Object[] args) throws Throwable {
+                                            String name = method.getName();
+                                            if ("toString".equals(name)) {
+                                                return "DeePXSpatialLayer("
+                                                        + layerKind + ")";
+                                            }
+                                            if ("hashCode".equals(name)) {
+                                                return System.identityHashCode(proxy);
+                                            }
+                                            if ("equals".equals(name)) {
+                                                return proxy == (args == null
+                                                        || args.length == 0
+                                                        ? null : args[0]);
+                                            }
+                                            if ("g".equals(name)
+                                                    && args != null
+                                                    && args.length == 1
+                                                    && args[0] != null) {
+                                                try {
+                                                    Object value =
+                                                            spatialStateGetValue.invoke(
+                                                                    spatialState);
+                                                    ChatAppearance.SpatialPose pose =
+                                                            value instanceof
+                                                                    ChatAppearance.SpatialPose
+                                                            ? (ChatAppearance.SpatialPose) value
+                                                            : ChatAppearance.SpatialPose.DISABLED;
+                                                    applySpatialLayer(
+                                                            args[0], pose, layerKind);
+                                                } catch (Throwable t) {
+                                                    if (!spatialLayerFailureLogged) {
+                                                        spatialLayerFailureLogged = true;
+                                                        Main.log("spatial graphics layer failed: " + t);
+                                                    }
+                                                }
+                                            }
+                                            return unit;
+                                        }
+                                    });
+                            element = spatialElementConstructor.newInstance(
+                                    callback);
+                            spatialElements[layerKind] = element;
+                        }
+                    }
+                }
+                return modifierThenMethod.invoke(modifier, element);
+            } catch (Throwable t) {
+                if (!spatialLayerFailureLogged) {
+                    spatialLayerFailureLogged = true;
+                    Main.log("spatial modifier attach failed: " + t);
+                }
+                return modifier;
+            }
+        }
+
+        private void applySpatialLayer(
+                Object scope, ChatAppearance.SpatialPose pose,
+                int layerKind) throws Exception {
+            boolean active = pose != null && pose.active;
+            float distanceXDp;
+            float distanceYDp;
+            float maxPitchDegrees;
+            float baseScale;
+            if (layerKind == SPATIAL_INPUT) {
+                // This node is nested in the transformed middle plane; add only near minus middle.
+                // With the 1.25x preset the combined maxima are 5.0/3.375 dp and 0.25 degrees.
+                distanceXDp = ChatAppearance.SPATIAL_INPUT_X_DP
+                        - ChatAppearance.SPATIAL_CONTENT_X_DP;
+                distanceYDp = ChatAppearance.SPATIAL_INPUT_Y_DP
+                        - ChatAppearance.SPATIAL_CONTENT_Y_DP;
+                maxPitchDegrees =
+                        ChatAppearance.SPATIAL_INPUT_ROTATION_DEGREES
+                        - ChatAppearance.SPATIAL_CONTENT_ROTATION_DEGREES;
+                baseScale = ChatAppearance.SPATIAL_INPUT_EXTRA_BASE_SCALE;
+            } else {
+                distanceXDp = 0f;
+                distanceYDp = 0f;
+                maxPitchDegrees = 0f;
+                baseScale = 1f;
+            }
+            float x = active ? pose.x : 0f;
+            float y = active ? pose.y : 0f;
+            float density = ((Number) spatialScopeDensity.invoke(
+                    scope)).floatValue();
+            if (Float.isNaN(density) || Float.isInfinite(density)
+                    || density <= 0f) {
+                density = android.content.res.Resources.getSystem()
+                        .getDisplayMetrics().density;
+            }
+            float magnitude = Math.min(
+                    1.25f, (float) Math.sqrt(x * x + y * y));
+            float scale = active
+                    ? baseScale + magnitude * 0.0008f : 1f;
+            spatialScaleX.invoke(scope, scale);
+            spatialScaleY.invoke(scope, scale);
+            spatialTranslationX.invoke(
+                    scope, x * distanceXDp * density);
+            spatialTranslationY.invoke(
+                    scope, y * distanceYDp * density);
+            // The host's other exposed rotation setter turns the node in the screen plane. It is
+            // intentionally never resolved or invoked; the spatial scene has no planar rotation.
+            spatialRotationX.invoke(
+                    scope, -y * maxPitchDegrees);
+            int appliedBit = 1 << layerKind;
+            if ((spatialLayerAppliedMask & appliedBit) == 0) {
+                spatialLayerAppliedMask |= appliedBit;
+                String label = layerKind == SPATIAL_INPUT
+                        ? "input" : (layerKind == SPATIAL_USER
+                        ? "user-bubble" : "assistant-bubble");
+                Main.log("spatial graphics layer applied: "
+                        + label + " active=" + active);
+            }
+        }
+
+        Object decorateModifier(Object modifier, BubbleRenderContext context) {
+            if (modifier == null || !modifierClass.isInstance(modifier)) return modifier;
+            Object result = attachSpatialModifier(
+                    modifier, context.user ? SPATIAL_USER : SPATIAL_ASSISTANT);
+            try {
+                Object positionElement = positionElement(
+                        context.glassSurface, "Bubble");
+                if (positionElement != null) {
+                    result = modifierThenMethod.invoke(result, positionElement);
+                }
+                Object callback = decorationCallback(context);
+                if (callback != null) {
+                    result = drawWithContentMethod.invoke(null, result, callback);
+                }
+                if (context.customSurface
+                        && context.style.borderWidth > 0f
+                        && context.borderColor != 0L
+                        && context.glassSurface == null) {
+                    result = borderMethod.invoke(
+                            null, result, Math.max(1f, context.style.borderWidth),
+                            context.borderColor, context.shape);
+                }
+            } catch (Throwable t) {
+                Main.log("bubble modifier decoration failed: " + t);
+            }
+            return result;
+        }
+
+        /**
+         * Applies assistant styling at the response container, once per message.  In particular,
+         * this deliberately does not enter DeepSeek's feedback-button Surface calls.
+         */
+        Object decorateAssistantModifier(
+                Object modifier, BubbleRenderContext context) {
+            if (modifier == null || !modifierClass.isInstance(modifier)) {
+                return modifier;
+            }
+            Object result = attachSpatialModifier(
+                    modifier, SPATIAL_ASSISTANT);
+            try {
+                // The host response Modifier is otherwise allowed to occupy the complete row.
+                // Size the custom surface from the measured text/action content instead: short
+                // answers remain compact, while wrapped answers naturally gain both width and
+                // line height. This also keeps the feedback row inside the measured layout instead
+                // of letting a fixed-height bubble overlap it.
+                if (context.customSurface && wrapContentSizeMethod != null) {
+                    result = wrapContentSizeMethod.invoke(null, result);
+                }
+                // When global glass is disabled, retain the configured solid/soft bubble style.
+                // With glass enabled the shared compositor supplies the material, so adding an
+                // opaque outer background here would also tint the native action row.
+                if (context.customSurface && context.glassSurface == null) {
+                    result = backgroundMethod.invoke(
+                            null, result, context.fillColor, context.shape);
+                    if (context.style.borderWidth > 0f
+                            && context.borderColor != 0L) {
+                        result = borderMethod.invoke(
+                                null, result, Math.max(1f, context.style.borderWidth),
+                                context.borderColor, context.shape);
+                    }
+                    if (paddingMethod != null) {
+                        result = paddingMethod.invoke(
+                                null, result, 12f, 8f, 12f, 8f);
+                    }
+                }
+                Object positionElement = positionElement(
+                        context.glassSurface, "AssistantBubble");
+                if (positionElement != null) {
+                    result = modifierThenMethod.invoke(result, positionElement);
+                }
+                Object callback = decorationCallback(context);
+                if (callback != null) {
+                    result = drawWithContentMethod.invoke(null, result, callback);
+                }
+                if (!assistantModifierLogged) {
+                    assistantModifierLogged = true;
+                    Main.log("assistant bubble modifier applied once at response container");
+                }
+            } catch (Throwable t) {
+                Main.log("assistant bubble modifier decoration failed: " + t);
+            }
+            return result;
+        }
+
+        boolean assistantHasActionRow(Object responseState) {
+            if (responseState == null) return false;
+            try {
+                Field field = responseState.getClass().getDeclaredField("d");
+                field.setAccessible(true);
+                return field.getBoolean(responseState);
+            } catch (Throwable t) {
+                if (!assistantActionStateFailureLogged) {
+                    assistantActionStateFailureLogged = true;
+                    Main.log("assistant action-row state probe unavailable: " + t);
+                }
+                return false;
+            }
+        }
+
+        Object attachBoundsModifier(
+                Object modifier, LiquidGlassEngine.SurfaceHandle surface,
+                String label) {
+            if (modifier == null || !modifierClass.isInstance(modifier)
+                    || surface == null) {
+                return modifier;
+            }
+            try {
+                Object element = positionElement(surface, label);
+                return element == null
+                        ? modifier : modifierThenMethod.invoke(modifier, element);
+            } catch (Throwable t) {
+                Main.log("glass bounds modifier attach failed for " + label + ": " + t);
+                return modifier;
+            }
+        }
+
+        /**
+         * A very light neutral base follows the real selector node. The shared refracting layer
+         * now covers the text and supplies the visible material; this base only prevents a
+         * one-frame colour hole while Compose moves the selected item.
+         */
+        Object decorateModeModifier(
+                Object modifier, boolean selected, boolean dark) {
+            if (modifier == null || !modifierClass.isInstance(modifier)) {
+                return modifier;
+            }
+            try {
+                Object shape = roundedMethod.invoke(null, 13f);
+                int fill;
+                int edge;
+                if (dark) {
+                    fill = selected ? 0x18FFFFFF : 0x03FFFFFF;
+                    edge = selected ? 0x34FFFFFF : 0x10FFFFFF;
+                } else {
+                    fill = selected ? 0x20FFFFFF : 0x03FFFFFF;
+                    edge = selected ? 0x38FFFFFF : 0x10FFFFFF;
+                }
+                Object result = backgroundMethod.invoke(
+                        null, modifier, composeColor(fill), shape);
+                Object decorated = borderMethod.invoke(
+                        null, result, selected ? 0.72f : 0.45f,
+                        composeColor(edge), shape);
+                if (!modeLocalGlassLogged) {
+                    modeLocalGlassLogged = true;
+                    Main.log("mode glass local material applied behind text");
+                }
+                return decorated;
+            } catch (Throwable t) {
+                Main.log("mode glass modifier decoration failed: " + t);
+                return modifier;
+            }
+        }
+
+        Object decorateInputModifier(
+                Object modifier, boolean dark,
+                LiquidGlassEngine.SurfaceHandle surface) {
+            Object result = attachSpatialModifier(
+                    modifier, SPATIAL_INPUT);
+            if (surface == null) return result;
+            result = decorateLocalGlass(
+                    result, 22f,
+                    dark ? 0x10FFFFFF : 0x12FFFFFF,
+                    dark ? 0x32FFFFFF : 0x36FFFFFF,
+                    0.52f, "input");
+            return attachBoundsModifier(result, surface, "Input");
+        }
+
+        Object decorateSearchModifier(
+                Object modifier, boolean dark,
+                LiquidGlassEngine.SurfaceHandle surface) {
+            Object result = decorateLocalGlass(
+                    modifier, 16f,
+                    dark ? 0x0EFFFFFF : 0x10FFFFFF,
+                    dark ? 0x2EFFFFFF : 0x32FFFFFF,
+                    0.48f, "conversation search");
+            return attachBoundsModifier(result, surface, "SidebarSearch");
+        }
+
+        /** Adds only the almost-transparent neutral base below the global refracting layer. */
+        private Object decorateLocalGlass(
+                Object modifier, float radiusDp, int fill, int edge,
+                float edgeWidthDp, String label) {
+            if (modifier == null || !modifierClass.isInstance(modifier)) {
+                return modifier;
+            }
+            try {
+                Object shape = roundedMethod.invoke(null, radiusDp);
+                Object result = backgroundMethod.invoke(
+                        null, modifier, composeColor(fill), shape);
+                Object decorated = borderMethod.invoke(
+                        null, result, edgeWidthDp, composeColor(edge), shape);
+                if ("input".equals(label) && !inputLocalGlassLogged) {
+                    inputLocalGlassLogged = true;
+                    Main.log("input glass local material applied behind text");
+                } else if ("conversation search".equals(label)
+                        && !searchLocalGlassLogged) {
+                    searchLocalGlassLogged = true;
+                    Main.log("sidebar search glass local material applied behind text");
+                }
+                return decorated;
+            } catch (Throwable t) {
+                Main.log(label + " local glass decoration failed: " + t);
+                return modifier;
+            }
+        }
+
+        private Object positionElement(
+                final LiquidGlassEngine.SurfaceHandle surface,
+                final String label) {
+            if (surface == null) return null;
+            try {
+                Object callback = Proxy.newProxyInstance(
+                        classLoader, new Class<?>[]{callbackClass},
+                        new InvocationHandler() {
+                            @Override public Object invoke(
+                                    Object proxy, Method method, Object[] args)
+                                    throws Throwable {
+                                String name = method.getName();
+                                if ("toString".equals(name)) {
+                                    return "DeePXLiquidGlassBounds(" + label + ")";
+                                }
+                                if ("hashCode".equals(name)) {
+                                    return System.identityHashCode(proxy);
+                                }
+                                if ("equals".equals(name)) {
+                                    return proxy == (args == null || args.length == 0
+                                            ? null : args[0]);
+                                }
+                                if ("g".equals(name) && args != null
+                                        && args.length == 1 && args[0] != null) {
+                                    captureGlassBounds(surface, args[0], label);
+                                }
+                                return unit;
+                            }
+                        });
+                Object element = positionElementConstructor.newInstance(callback);
+                surface.bindOwner(element);
+                return element;
+            } catch (Throwable t) {
+                Main.log("glass bounds modifier failed for " + label + ": " + t);
+                return null;
+            }
+        }
+
+        private void captureGlassBounds(
+                LiquidGlassEngine.SurfaceHandle surface, Object coordinates,
+                String label) {
+            try {
+                if (!Boolean.TRUE.equals(
+                        coordinatesAttachedMethod.invoke(coordinates))) {
+                    return;
+                }
+                long size = ((Number) coordinatesSizeMethod.invoke(
+                        coordinates)).longValue();
+                int width = (int) (size >> 32);
+                int height = (int) (size & 0xFFFFFFFFL);
+                long position = ((Number) coordinatesWindowMethod.invoke(
+                        coordinates, 0L)).longValue();
+                if ("Input".equals(label) && !inputCoordinateProbeLogged) {
+                    inputCoordinateProbeLogged = true;
+                    logCoordinateProbe(coordinates, size);
+                }
+                float rawX = Float.intBitsToFloat((int) (position >> 32));
+                float rawY = Float.intBitsToFloat(
+                        (int) (position & 0xFFFFFFFFL));
+                int directLeft = Math.round(rawX);
+                int directTop = Math.round(rawY);
+                int inverseLeft = -directLeft;
+                int inverseTop = -directTop;
+                android.util.DisplayMetrics metrics =
+                        android.content.res.Resources.getSystem()
+                                .getDisplayMetrics();
+                float directScore = visibleBoundsScore(
+                        directLeft, directTop, width, height,
+                        metrics.widthPixels, metrics.heightPixels);
+                float inverseScore = visibleBoundsScore(
+                        inverseLeft, inverseTop, width, height,
+                        metrics.widthPixels, metrics.heightPixels);
+                int left = directScore >= inverseScore
+                        ? directLeft : inverseLeft;
+                int top = directScore >= inverseScore
+                        ? directTop : inverseTop;
+                if (width > 0 && height > 0) {
+                    surface.setBounds(left, top, left + width, top + height);
+                }
+            } catch (Throwable t) {
+                Main.log("glass bounds capture failed for " + label + ": " + t);
+            }
+        }
+
+        private void logCoordinateProbe(Object coordinates, long size) {
+            try {
+                StringBuilder out = new StringBuilder(
+                        "input coordinate probe class=")
+                        .append(coordinates.getClass().getName())
+                        .append(" size=")
+                        .append((int) (size >> 32))
+                        .append("x")
+                        .append((int) (size & 0xFFFFFFFFL));
+                String[] names = new String[]{"F", "H", "b", "t", "w"};
+                for (String name : names) {
+                    try {
+                        Method method = coordinates.getClass()
+                                .getMethod(name, long.class);
+                        long packed = ((Number) method.invoke(
+                                coordinates, 0L)).longValue();
+                        out.append(" ")
+                                .append(name)
+                                .append("=")
+                                .append(Float.intBitsToFloat(
+                                        (int) (packed >> 32)))
+                                .append(",")
+                                .append(Float.intBitsToFloat(
+                                        (int) (packed & 0xFFFFFFFFL)));
+                    } catch (Throwable ignored) {}
+                }
+                Main.log(out.toString());
+            } catch (Throwable t) {
+                Main.log("input coordinate probe failed: " + t);
+            }
+        }
+
+        private static float visibleBoundsScore(
+                int left, int top, int width, int height,
+                int screenWidth, int screenHeight) {
+            int right = left + Math.max(1, width);
+            int bottom = top + Math.max(1, height);
+            int intersectionWidth = Math.max(
+                    0, Math.min(right, screenWidth) - Math.max(left, 0));
+            int intersectionHeight = Math.max(
+                    0, Math.min(bottom, screenHeight) - Math.max(top, 0));
+            float area = Math.max(1f, (float) width * (float) height);
+            float score = intersectionWidth * (float) intersectionHeight / area * 10f;
+            if (left >= -2) score += 1f;
+            if (top >= -2) score += 1f;
+            if (right <= screenWidth + 2) score += 1f;
+            if (bottom <= screenHeight + 2) score += 1f;
+            return score;
+        }
+
+        private Object decorationCallback(final BubbleRenderContext context) {
+            final ChatAppearance.BubbleStyle style = context.style;
+            if (!style.hasDecoration()) return null;
+            File file = ChatAppearance.assetFile(style.decorationFile);
+            if (!file.isFile()) return null;
+            String key = (mapping.googlePlay ? "gp|" : "cn|")
+                    + (context.user ? "u|" : "a|")
+                    + file.getAbsolutePath() + "|" + file.lastModified() + "|"
+                    + Float.floatToIntBits(style.decorationSize) + "|"
+                    + Float.floatToIntBits(style.decorationX) + "|"
+                    + Float.floatToIntBits(style.decorationOpacity) + "|"
+                    + Float.floatToIntBits(style.decorationRotation);
+            Object cached = BUBBLE_DRAW_CALLBACKS.get(key);
+            if (cached != null) return cached;
+
+            android.graphics.Bitmap bitmap =
+                    ChatAppearance.loadBitmap(file, 512, 512);
+            if (bitmap == null) return null;
+            if (Math.abs(style.decorationRotation) > 0.05f) {
+                try {
+                    android.graphics.Matrix matrix = new android.graphics.Matrix();
+                    matrix.postRotate(style.decorationRotation);
+                    android.graphics.Bitmap rotated = android.graphics.Bitmap.createBitmap(
+                            bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(),
+                            matrix, true);
+                    if (rotated != bitmap) bitmap = rotated;
+                } catch (Throwable t) {
+                    Main.log("bubble decoration rotation failed: " + t);
+                }
+            }
+            final android.graphics.Bitmap renderedBitmap = bitmap;
+            final Object image;
+            try {
+                image = imageConstructor.newInstance(renderedBitmap);
+            } catch (Throwable t) {
+                Main.log("bubble decoration image wrapper failed: " + t);
+                return null;
+            }
+
+            Object callback = Proxy.newProxyInstance(
+                    classLoader, new Class<?>[]{callbackClass},
+                    new InvocationHandler() {
+                        boolean drawFailureLogged;
+
+                        @Override public Object invoke(
+                                Object proxy, Method method, Object[] args)
+                                throws Throwable {
+                            String name = method.getName();
+                            if ("toString".equals(name)) {
+                                return "DeePXBubbleDecoration";
+                            }
+                            if ("hashCode".equals(name)) {
+                                return System.identityHashCode(proxy);
+                            }
+                            if ("equals".equals(name)) {
+                                return proxy == (args == null || args.length == 0
+                                        ? null : args[0]);
+                            }
+                            if ("g".equals(name) && args != null
+                                    && args.length == 1 && args[0] != null) {
+                                Object scope = args[0];
+                                try {
+                                    drawContentMethod.invoke(scope);
+                                } catch (java.lang.reflect.InvocationTargetException t) {
+                                    Throwable cause = t.getCause();
+                                    throw cause == null ? t : cause;
+                                }
+                                try {
+                                    drawDecoration(
+                                            scope, image, renderedBitmap, style);
+                                } catch (Throwable t) {
+                                    if (!drawFailureLogged) {
+                                        drawFailureLogged = true;
+                                        Main.log("bubble decoration draw failed: " + t);
+                                    }
+                                }
+                                return unit;
+                            }
+                            return unit;
+                        }
+                    });
+            if (BUBBLE_DRAW_CALLBACKS.size() > 48) {
+                BUBBLE_DRAW_CALLBACKS.clear();
+            }
+            Object previous = BUBBLE_DRAW_CALLBACKS.putIfAbsent(key, callback);
+            return previous == null ? callback : previous;
+        }
+
+        private void drawDecoration(
+                Object scope, Object image, android.graphics.Bitmap bitmap,
+                ChatAppearance.BubbleStyle style) throws Exception {
+            float density = ((Number) densityMethod.invoke(scope)).floatValue();
+            long packedSize = ((Number) drawSizeMethod.invoke(scope)).longValue();
+            float bubbleWidth =
+                    Float.intBitsToFloat((int) (packedSize >> 32));
+            float box = Math.max(1f, style.decorationSize * density);
+            float scale = Math.min(
+                    box / Math.max(1, bitmap.getWidth()),
+                    box / Math.max(1, bitmap.getHeight()));
+            int width = Math.max(1, Math.round(bitmap.getWidth() * scale));
+            int height = Math.max(1, Math.round(bitmap.getHeight() * scale));
+            int x = Math.round(Math.max(0f, bubbleWidth - width)
+                    * style.decorationX);
+            int y = -Math.round(height * 0.30f);
+            long sourceSize = packIntPair(bitmap.getWidth(), bitmap.getHeight());
+            long destinationOffset = packIntPair(x, y);
+            long destinationSize = packIntPair(width, height);
+            drawImageMethod.invoke(
+                    scope, image, 0L, sourceSize,
+                    destinationOffset, destinationSize,
+                    style.decorationOpacity, null, 3, 1);
+        }
+
+        private static long packIntPair(int first, int second) {
+            return (((long) first) << 32) | (((long) second) & 0xFFFFFFFFL);
+        }
+
+        private static long composeColor(int argb) {
+            return (((long) argb) & 0xFFFFFFFFL) << 32;
+        }
+    }
+
+    static boolean isWelcomeWhaleMotionEnabled() {
+        int value = welcomeWhaleMotionEnabledCache;
+        if (value >= 0) return value == 1;
+        boolean enabled = new File(WHALE_MOTION_FILE).isFile();
+        welcomeWhaleMotionEnabledCache = enabled ? 1 : 0;
+        return enabled;
+    }
+
+    static String homeGreeting() {
+        return sanitizeHomeGreeting(Main.readSmallText(HOME_GREETING_FILE));
+    }
+
+    static boolean isNativeSettingsEntryEnabled() {
+        // Version-agnostic: the native "Plugins" section is used by default; the disabled marker is
+        // written only when the user turns the "使用旧版入口" switch ON to fall back to the floating
+        // top-right entry. This applies to every host generation alike.
+        return !new File(NATIVE_SETTINGS_ENTRY_DISABLED_FILE).isFile();
+    }
+
+    static String sanitizeHomeGreeting(String greeting) {
+        if (greeting == null) return "";
+        String safe = greeting.replace('\r', ' ').replace('\n', ' ').replace('\t', ' ').trim();
+        while (safe.contains("  ")) safe = safe.replace("  ", " ");
+        if (safe.length() > 60) safe = safe.substring(0, 60).trim();
+        return safe;
+    }
+
+    private static void captureWelcomeWhaleDrawNode(
+            Object drawScope, Class<?> invalidatorOwner,
+            String invalidatorMethod) {
+        if (drawScope == null || invalidatorOwner == null) return;
+        try {
+            Method invalidate = Main.welcomeWhaleDrawNodeInvalidate;
+            for (Field field : drawScope.getClass().getDeclaredFields()) {
+                field.setAccessible(true);
+                Object value = field.get(drawScope);
+                if (value == null) continue;
+                if (invalidate == null) {
+                    for (Method candidate : invalidatorOwner.getDeclaredMethods()) {
+                        Class<?>[] p = candidate.getParameterTypes();
+                        if (Modifier.isStatic(candidate.getModifiers())
+                                && invalidatorMethod.equals(candidate.getName())
+                                && p.length == 1 && p[0].isInstance(value)) {
+                            candidate.setAccessible(true);
+                            invalidate = candidate;
+                            Main.welcomeWhaleDrawNodeInvalidate = candidate;
+                            break;
+                        }
+                    }
+                }
+                if (invalidate != null
+                        && invalidate.getParameterTypes()[0].isInstance(value)) {
+                    Main.welcomeWhaleDrawNode = new WeakReference<>(value);
+                    return;
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Resolves R.drawable.chat_welcome_logo. Its numeric id shifts between generations
+     * (2.4.1: 0x7f070063, 2.5.3: 0x7f070064), so prefer the resource name and only fall back
+     * to the generation constants.
+     */
+    private static volatile int welcomeWhaleLogoResCache;
+
+    private static int welcomeWhaleLogoRes() {
+        int cached = welcomeWhaleLogoResCache;
+        if (cached != 0) return cached;
+        int resolved = HostCompat.isV253() ? 0x7f070064 : 0x7f070063;
+        try {
+            Context ctx = Main.hostApplicationContext;
+            if (ctx != null) {
+                int id = ctx.getResources().getIdentifier(
+                        "chat_welcome_logo", "drawable", ctx.getPackageName());
+                if (id != 0) resolved = id;
+            }
+        } catch (Throwable ignored) {}
+        welcomeWhaleLogoResCache = resolved;
+        return resolved;
+    }
+
+    /**
+     * The whale draw-node invalidator lives in a big host utility class that shifts every
+     * generation. 2.5.3 has not been located yet, so return null there: the frame driver then
+     * falls back to invalidating the containing Android view.
+     */
+    private static Class<?> resolveWhaleDrawInvalidatorOwner(ClassLoader cl) {
+        if (HostCompat.isV253()) return null;
+        try {
+            return HostCompat.isV241()
+                    ? Class.forName("lr9", false, cl)
+                    : HostCompat.isV236()
+                    ? Class.forName("bi4", false, cl)
+                    : HostCompat.isV234()
+                    ? Class.forName(HostCompat.isGooglePlay() ? "wj9" : "a94", false, cl)
+                    : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static String resolveWhaleDrawInvalidatorMethod() {
+        return HostCompat.isV241() ? "U"
+                : HostCompat.isV236() ? "L"
+                : HostCompat.isGooglePlay() ? "F" : "I";
+    }
+
+    /**
+     * Rotates only DeepSeek's native chat_welcome_logo painter. The painter is identified at the
+     * resource-loader boundary, then its DrawScope canvas is transformed at draw time. This keeps
+     * the rest of the ComposeView stationary and works without replacing DeepSeek's drawable.
+     */
+    void hookWelcomeWhaleMotion(ClassLoader cl) {
+        final String loaderOwner;
+        final String loaderMethod;
+        final String painterOwner;
+        final String drawStateMethod;
+        final String canvasMethod;
+        if (HostCompat.isV253()) {
+            // 2.5.3 (code275): the Painter / DrawScope / DrawContext / Canvas family was renamed
+            // again (still obfuscated into defpackage). Proven by the host's own welcome call site:
+            //   loader   df5.s  -> mf6.C   (mf6.C(R.drawable.chat_welcome_logo, 0, composer))
+            //   Painter  hi6    -> oh7     (identical members/method names: g/h/i/f/b/d)
+            //   DrawScope su2   -> fj3     (getDrawContext f0 -> m0)
+            //   DrawCtx  ts1    -> le2     (getCanvas s -> u)
+            //   Canvas   uq0    -> x81     (save h / rotate b / translate n / restore o unchanged)
+            loaderOwner = "mf6";
+            loaderMethod = "C";
+            painterOwner = "oh7";
+            drawStateMethod = "m0";
+            canvasMethod = "u";
+        } else if (HostCompat.isV241()) {
+            loaderOwner = "df5";
+            loaderMethod = "s";
+            painterOwner = "hi6";
+            drawStateMethod = "f0";
+            canvasMethod = "s";
+        } else if (HostCompat.isV236()) {
+            loaderOwner = "ce5";
+            loaderMethod = "f0";
+            painterOwner = "ec6";
+            drawStateMethod = "d0";
+            canvasMethod = "v";
+        } else if (HostCompat.isV234()) {
+            if (HostCompat.isGooglePlay()) {
+                loaderOwner = "ms9";
+                loaderMethod = "U";
+                painterOwner = "td6";
+                drawStateMethod = "g0";
+                canvasMethod = "r";
+            } else {
+                loaderOwner = "ye5";
+                loaderMethod = "C";
+                painterOwner = "xb6";
+                drawStateMethod = "e0";
+                canvasMethod = "v";
+            }
+        } else if (HostCompat.isV230()) {
+            loaderOwner = "t75";
+            loaderMethod = "s";
+            painterOwner = "s56";
+            drawStateMethod = "d0";
+            canvasMethod = "v";
+        } else {
+            loaderOwner = "z45";
+            loaderMethod = "w";
+            painterOwner = "z26";
+            drawStateMethod = "g0";
+            canvasMethod = "E";
+        }
+        try {
+            final Class<?> painterClass = Class.forName(painterOwner, false, cl);
+            Class<?> resources = Class.forName(loaderOwner, false, cl);
+            Method resourceLoader = null;
+            for (Method candidate : resources.getDeclaredMethods()) {
+                Class<?>[] p = candidate.getParameterTypes();
+                if (loaderMethod.equals(candidate.getName())
+                        && Modifier.isStatic(candidate.getModifiers())
+                        && p.length >= 3 && p[0] == int.class
+                        && painterClass.isAssignableFrom(candidate.getReturnType())) {
+                    resourceLoader = candidate;
+                    break;
+                }
+            }
+            if (resourceLoader == null) throw new NoSuchMethodException(
+                    loaderOwner + "." + loaderMethod + " drawable loader");
+            resourceLoader.setAccessible(true);
+            Main.MODULE.hook(resourceLoader).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    List<Object> args = chain.getArgs();
+                    boolean whale = args != null && !args.isEmpty()
+                            && args.get(0) instanceof Number
+                            && ((Number) args.get(0)).intValue() == welcomeWhaleLogoRes();
+                    Object composer = whale && args.size() >= 3 ? args.get(2) : null;
+                    Object painter = chain.proceed();
+                    if (painter != null && whale) {
+                        WELCOME_WHALE_PAINTERS.put(painter, Boolean.TRUE);
+                        if (composer != null) {
+                            // Register only after painterResource returns.  Its own restart scope
+                            // merely reloads the cached Painter and does not invalidate the Image
+                            // draw node.  The next scope closed by the caller owns the Image and
+                            // can make the whale draw again on every frame.
+                            WELCOME_WHALE_COMPOSERS.put(composer, Boolean.TRUE);
+                        }
+                        if (welcomeWhaleCapturedLogged.compareAndSet(false, true)) {
+                            Main.log("welcome whale painter captured");
+                        }
+                    }
+                    return painter;
+                }
+            });
+
+            final Class<?> composerClass = resourceLoader.getParameterTypes()[2];
+            final Method endRestartGroup = composerClass.getMethod("v");
+            endRestartGroup.setAccessible(true);
+            final Method invalidateScope = endRestartGroup.getReturnType()
+                    .getMethod("b", Object.class);
+            invalidateScope.setAccessible(true);
+            welcomeWhaleScopeInvalidate = invalidateScope;
+            Main.MODULE.hook(endRestartGroup).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    Object scope = chain.proceed();
+                    Object composer = chain.getThisObject();
+                    // Keep the marker through any non-restartable groups until the first usable
+                    // caller scope is returned.
+                    if (scope != null
+                            && WELCOME_WHALE_COMPOSERS.remove(composer) != null) {
+                        WELCOME_WHALE_SCOPES.put(scope, Boolean.TRUE);
+                        if (welcomeWhaleScopeLogged.compareAndSet(false, true)) {
+                            Main.log("welcome whale recompose scope captured type="
+                                    + scope.getClass().getName());
+                        }
+                    }
+                    return scope;
+                }
+            });
+
+            Method painterDraw = null;
+            for (Method candidate : painterClass.getDeclaredMethods()) {
+                Class<?>[] p = candidate.getParameterTypes();
+                if ("g".equals(candidate.getName()) && p.length == 4
+                        && p[1] == long.class && p[2] == float.class) {
+                    painterDraw = candidate;
+                    break;
+                }
+            }
+            if (painterDraw == null) throw new NoSuchMethodException(painterOwner + ".g");
+            painterDraw.setAccessible(true);
+            final Class<?> drawScopeClass = painterDraw.getParameterTypes()[0];
+            final Class<?> drawInvalidatorOwner = resolveWhaleDrawInvalidatorOwner(cl);
+            final String drawInvalidatorMethod = resolveWhaleDrawInvalidatorMethod();
+            final Method stateGetter = drawScopeClass.getMethod(drawStateMethod);
+            stateGetter.setAccessible(true);
+            final Method canvasGetter = stateGetter.getReturnType().getMethod(canvasMethod);
+            canvasGetter.setAccessible(true);
+            final Class<?> canvasClass = canvasGetter.getReturnType();
+            final Method save = canvasClass.getMethod("h");
+            final Method rotate = canvasClass.getMethod("b", float.class);
+            final Method translate = canvasClass.getMethod("n", float.class, float.class);
+            final Method restore = canvasClass.getMethod("o");
+            final AtomicBoolean drawErrorLogged = new AtomicBoolean(false);
+            Main.MODULE.hook(painterDraw).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    Object painter = chain.getThisObject();
+                    if (!isWelcomeWhaleMotionEnabled()
+                            || !WELCOME_WHALE_PAINTERS.containsKey(painter)) {
+                        return chain.proceed();
+                    }
+                    welcomeWhaleLastDrawAt = SystemClock.uptimeMillis();
+                    Object canvas = null;
+                    boolean saved = false;
+                    try {
+                        List<Object> args = chain.getArgs();
+                        Object drawScope = args.get(0);
+                        captureWelcomeWhaleDrawNode(
+                                drawScope, drawInvalidatorOwner,
+                                drawInvalidatorMethod);
+                        long size = ((Number) args.get(1)).longValue();
+                        float width = Float.intBitsToFloat((int) (size >> 32));
+                        float height = Float.intBitsToFloat((int) size);
+                        canvas = canvasGetter.invoke(stateGetter.invoke(drawScope));
+                        save.invoke(canvas);
+                        saved = true;
+                        translate.invoke(canvas, width * 0.5f, height * 0.5f);
+                        rotate.invoke(canvas, welcomeWhaleAngle);
+                        if (welcomeWhaleDrawLogged.compareAndSet(false, true)) {
+                            Main.log("welcome whale continuous draw active");
+                        }
+                        if (welcomeWhaleDrawCount.incrementAndGet() == 30) {
+                            Main.log("welcome whale continuous frames confirmed");
+                        }
+                        translate.invoke(canvas, width * -0.5f, height * -0.5f);
+                    } catch (Throwable error) {
+                        if (drawErrorLogged.compareAndSet(false, true)) {
+                            Main.log("welcome whale draw transform disabled: "
+                                    + Main.safeThrowableMessage(error));
+                        }
+                        if (saved && canvas != null) {
+                            try { restore.invoke(canvas); } catch (Throwable ignored) {}
+                        }
+                        return chain.proceed();
+                    }
+                    try {
+                        return chain.proceed();
+                    } finally {
+                        if (saved && canvas != null) {
+                            try { restore.invoke(canvas); } catch (Throwable ignored) {}
+                        }
+                    }
+                }
+            });
+            Main.log("welcome whale painter motion hooked owner=" + painterOwner);
+        } catch (Throwable error) {
+            Main.log("welcome whale painter motion unavailable: " + Main.safeThrowableMessage(error));
+        }
+    }
+
+    /**
+     * Adds a travelling black/ocean-blue shader at the final Android and Compose text draw
+     * boundaries. Keeping the effect at the canvas boundary means host typography, layout,
+     * selection, accessibility text and semantic error colours all remain intact.
+     */
+    void hookTextWaveMotion(ClassLoader cl) {
+        int nativeHooks = 0;
+        try {
+            Method onDraw = TextView.class.getDeclaredMethod("onDraw", Canvas.class);
+            onDraw.setAccessible(true);
+            Main.MODULE.hook(onDraw).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    TextView text = (TextView) chain.getThisObject();
+                    float density = text.getResources().getDisplayMetrics().density;
+                    TextWaveEngine.PaintState state = TextWaveEngine.apply(
+                            text.getPaint(), density);
+                    try {
+                        return chain.proceed();
+                    } finally {
+                        TextWaveEngine.restore(state);
+                    }
+                }
+            });
+            nativeHooks = 1;
+        } catch (Throwable error) {
+            Main.log("native text wave unavailable: " + Main.safeThrowableMessage(error));
+        }
+
+        final String canvasWrapperName;
+        final String textNodeName;
+        final String textDrawMethodName;
+        final String invalidatorOwnerName;
+        final String invalidatorMethodName;
+        if (HostCompat.isV241()) {
+            canvasWrapperName = "rm8";
+            textNodeName = "vm8";
+            textDrawMethodName = "l0";
+            invalidatorOwnerName = "lr9";
+            invalidatorMethodName = "U";
+        } else if (HostCompat.isV236()) {
+            canvasWrapperName = "ie8";
+            textNodeName = "me8";
+            textDrawMethodName = "j0";
+            invalidatorOwnerName = "bi4";
+            invalidatorMethodName = "L";
+        } else if (HostCompat.isV234() && HostCompat.isGooglePlay()) {
+            canvasWrapperName = "ei8";
+            textNodeName = "ii8";
+            textDrawMethodName = "m0";
+            invalidatorOwnerName = "wj9";
+            invalidatorMethodName = "F";
+        } else if (HostCompat.isV234()) {
+            canvasWrapperName = "ce8";
+            textNodeName = "ge8";
+            textDrawMethodName = "k0";
+            invalidatorOwnerName = "a94";
+            invalidatorMethodName = "I";
+        } else if (HostCompat.isV230()) {
+            canvasWrapperName = "x58";
+            textNodeName = "b68";
+            textDrawMethodName = "j0";
+            invalidatorOwnerName = "is1";
+            invalidatorMethodName = "C";
+        } else {
+            canvasWrapperName = "v28";
+            textNodeName = "z28";
+            textDrawMethodName = "m0";
+            invalidatorOwnerName = "zp1";
+            invalidatorMethodName = "g0";
+        }
+        try {
+            final float density = Main.hostApplicationContext == null
+                    ? 1f : Main.hostApplicationContext.getResources()
+                    .getDisplayMetrics().density;
+            Class<?> canvasWrapper = Class.forName(canvasWrapperName, false, cl);
+            int composeCanvasHooks = 0;
+            for (Method candidate : canvasWrapper.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                String name = candidate.getName();
+                if (!(name.startsWith("drawText") || "drawGlyphs".equals(name))
+                        || parameters.length == 0
+                        || parameters[parameters.length - 1] != android.graphics.Paint.class) {
+                    continue;
+                }
+                candidate.setAccessible(true);
+                Main.MODULE.hook(candidate).intercept(new Hooker() {
+                    @Override public Object intercept(Chain chain) throws Throwable {
+                        List<Object> args = chain.getArgs();
+                        Object last = args.isEmpty() ? null : args.get(args.size() - 1);
+                        TextWaveEngine.PaintState state = last instanceof android.graphics.Paint
+                                ? TextWaveEngine.apply((android.graphics.Paint) last, density)
+                                : null;
+                        try {
+                            return chain.proceed();
+                        } finally {
+                            TextWaveEngine.restore(state);
+                        }
+                    }
+                });
+                composeCanvasHooks++;
+            }
+            if (composeCanvasHooks == 0) {
+                throw new NoSuchMethodException(
+                        canvasWrapperName + ".drawText*/drawGlyphs");
+            }
+
+            Class<?> textNode = Class.forName(textNodeName, false, cl);
+            Method textDraw = null;
+            for (Method candidate : textNode.getDeclaredMethods()) {
+                if (textDrawMethodName.equals(candidate.getName())
+                        && candidate.getParameterTypes().length == 1) {
+                    textDraw = candidate;
+                    break;
+                }
+            }
+            if (textDraw == null) throw new NoSuchMethodException(
+                    textNodeName + "." + textDrawMethodName);
+            Class<?> invalidatorOwner = Class.forName(
+                    invalidatorOwnerName, false, cl);
+            Method invalidate = null;
+            for (Method candidate : invalidatorOwner.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (Modifier.isStatic(candidate.getModifiers())
+                        && invalidatorMethodName.equals(candidate.getName())
+                        && parameters.length == 1
+                        && parameters[0].isAssignableFrom(textNode)) {
+                    invalidate = candidate;
+                    break;
+                }
+            }
+            if (invalidate == null) throw new NoSuchMethodException(
+                    invalidatorOwnerName + "." + invalidatorMethodName
+                            + "(textNode)");
+            textDraw.setAccessible(true);
+            invalidate.setAccessible(true);
+            final Method nodeInvalidator = invalidate;
+            Main.MODULE.hook(textDraw).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    TextWaveEngine.captureComposeTextNode(
+                            chain.getThisObject(), nodeInvalidator);
+                    return chain.proceed();
+                }
+            });
+            Main.log("text wave hooked native=" + nativeHooks
+                    + ", composeCanvas=" + composeCanvasHooks
+                    + ", node=" + textNodeName);
+        } catch (Throwable error) {
+            Main.log("compose text wave unavailable: " + Main.safeThrowableMessage(error));
+        }
+    }
+
+    /** Replaces DeepSeek's model-specific and unified home welcome strings when configured. */
+    void hookHomeGreeting(final ClassLoader cl) {
+        final String helperName;
+        final String formattedMethodName;
+        final String plainMethodName;
+        final String composeTextOwnerName;
+        if (HostCompat.isV241()) {
+            helperName = "b65";
+            formattedMethodName = "C";
+            plainMethodName = "B";
+            composeTextOwnerName = "gq8";
+            hostWelcomeMessageResourceId = 0x7f0f01e1;
+            hostWelcomeTitleResourceId = 0x7f0f0384;
+        } else if (HostCompat.isV236()) {
+            helperName = "ea5";
+            formattedMethodName = "w";
+            plainMethodName = "v";
+            composeTextOwnerName = "wh8";
+            hostWelcomeMessageResourceId = 0x7f0f01df;
+            hostWelcomeTitleResourceId = 0x7f0f0377;
+        } else if (HostCompat.isV234() && HostCompat.isGooglePlay()) {
+            helperName = "em6";
+            formattedMethodName = "u";
+            plainMethodName = "t";
+            composeTextOwnerName = "ql8";
+            hostWelcomeMessageResourceId = 0x7f0f01df;
+            hostWelcomeTitleResourceId = 0x7f0f0377;
+        } else if (HostCompat.isV234()) {
+            helperName = "aa5";
+            formattedMethodName = "D";
+            plainMethodName = "C";
+            composeTextOwnerName = "qh8";
+            hostWelcomeMessageResourceId = 0x7f0f01df;
+            hostWelcomeTitleResourceId = 0x7f0f0377;
+        } else if (HostCompat.isV230() && !HostCompat.isV234()) {
+            helperName = "w85";
+            formattedMethodName = "v";
+            plainMethodName = "u";
+            composeTextOwnerName = "j98";
+            hostWelcomeMessageResourceId = 0x7f0e01d0;
+            hostWelcomeTitleResourceId = 0x7f0e0352;
+        } else if (!HostCompat.isV230()) {
+            helperName = "c65";
+            formattedMethodName = "v";
+            plainMethodName = "u";
+            composeTextOwnerName = "i68";
+            hostWelcomeMessageResourceId = 0x7f0e01c2;
+            hostWelcomeTitleResourceId = 0x7f0e031c;
+        } else {
+            Main.log("home greeting mapping unavailable for this host");
+            return;
+        }
+        try {
+            try {
+                Class<?> strings = Class.forName("com.deepseek.chat.R$string", false, cl);
+                Field welcome = strings.getDeclaredField("model_welcome_message");
+                welcome.setAccessible(true);
+                hostWelcomeMessageResourceId = welcome.getInt(null);
+                Field title = strings.getDeclaredField("welcome_message_title_unified");
+                title.setAccessible(true);
+                hostWelcomeTitleResourceId = title.getInt(null);
+            } catch (Throwable resourceError) {
+                // Release builds inline and strip R$string. The verified per-generation IDs
+                // above remain the authoritative fallback.
+            }
+            Context greetingContext = Main.hostApplicationContext;
+            if (greetingContext != null) {
+                try {
+                    hostWelcomeMessagePattern = greetingContext.getResources()
+                            .getText(hostWelcomeMessageResourceId).toString();
+                    hostWelcomeTitleText = greetingContext.getResources()
+                            .getText(hostWelcomeTitleResourceId).toString();
+                } catch (Throwable ignored) {}
+            }
+            Class<?> helper = Class.forName(helperName, false, cl);
+            Method formattedString = null;
+            for (Method candidate : helper.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (Modifier.isStatic(candidate.getModifiers())
+                        && formattedMethodName.equals(candidate.getName())
+                        && parameters.length == 3
+                        && parameters[0] == int.class
+                        && parameters[1].isArray()) {
+                    formattedString = candidate;
+                    break;
+                }
+            }
+            if (formattedString == null) {
+                throw new NoSuchMethodException(
+                        helperName + "." + formattedMethodName);
+            }
+            formattedString.setAccessible(true);
+            Method plainString = null;
+            for (Method candidate : helper.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (Modifier.isStatic(candidate.getModifiers())
+                        && plainMethodName.equals(candidate.getName())
+                        && parameters.length == 2
+                        && parameters[0] == int.class) {
+                    plainString = candidate;
+                    break;
+                }
+            }
+            if (plainString == null) {
+                throw new NoSuchMethodException(
+                        helperName + "." + plainMethodName);
+            }
+            plainString.setAccessible(true);
+            deoptimizeBubbleMethod(formattedString);
+            deoptimizeBubbleMethod(plainString);
+            Main.MODULE.hook(formattedString).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    String greeting = homeGreetingForResource(chain.getArg(0));
+                    if (greeting != null) return greeting;
+                    return chain.proceed();
+                }
+            });
+            Main.MODULE.hook(plainString).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    String greeting = homeGreetingForResource(chain.getArg(0));
+                    if (greeting != null) return greeting;
+                    return chain.proceed();
+                }
+            });
+            // R8/ART can inline the tiny Compose resource helpers above.  Keep a precise
+            // resource-boundary fallback for the two verified welcome IDs so the custom text
+            // still applies without touching any unrelated DeepSeek strings.
+            Method resourcesPlain = android.content.res.Resources.class.getDeclaredMethod(
+                    "getString", int.class);
+            Method resourcesFormatted = android.content.res.Resources.class.getDeclaredMethod(
+                    "getString", int.class, Object[].class);
+            resourcesPlain.setAccessible(true);
+            resourcesFormatted.setAccessible(true);
+            Main.MODULE.hook(resourcesPlain).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    String greeting = homeGreetingForResource(chain.getArg(0));
+                    return greeting != null ? greeting : chain.proceed();
+                }
+            });
+            Main.MODULE.hook(resourcesFormatted).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    String greeting = homeGreetingForResource(chain.getArg(0));
+                    return greeting != null ? greeting : chain.proceed();
+                }
+            });
+            Class<?> composeTextOwner = Class.forName(
+                    composeTextOwnerName, false, cl);
+            Method composeText = null;
+            for (Method candidate : composeTextOwner.getDeclaredMethods()) {
+                Class<?>[] parameters = candidate.getParameterTypes();
+                if (Modifier.isStatic(candidate.getModifiers())
+                        && "b".equals(candidate.getName())
+                        && parameters.length == 18
+                        && parameters[0] == String.class) {
+                    candidate.setAccessible(true);
+                    composeText = candidate;
+                    break;
+                }
+            }
+            if (composeText == null) throw new NoSuchMethodException(
+                    composeTextOwnerName + ".b/18");
+            deoptimizeBubbleMethod(composeText);
+            Main.MODULE.hook(composeText).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    Object current = chain.getArg(0);
+                    String greeting = current instanceof String
+                            && isHostWelcomeText((String) current)
+                            ? homeGreeting() : "";
+                    if (greeting.length() == 0) return chain.proceed();
+                    if (HOME_GREETING_MATCH_LOGGED.compareAndSet(false, true)) {
+                        Main.log("home greeting applied at compose text length="
+                                + greeting.length());
+                    }
+                    Object[] args = chain.getArgs().toArray();
+                    args[0] = greeting;
+                    return chain.proceed(args);
+                }
+            });
+            Main.log("home greeting hooked " + helperName + "."
+                    + formattedMethodName + "/" + plainMethodName
+                    + " resources=0x"
+                    + Integer.toHexString(hostWelcomeMessageResourceId)
+                    + ",0x" + Integer.toHexString(hostWelcomeTitleResourceId));
+        } catch (Throwable error) {
+            Main.log("home greeting hook unavailable: " + Main.safeThrowableMessage(error));
+        }
+    }
+
+    private static String homeGreetingForResource(Object resourceId) {
+        if (!(resourceId instanceof Integer)) return null;
+        int id = ((Integer) resourceId).intValue();
+        if (id != hostWelcomeMessageResourceId && id != hostWelcomeTitleResourceId) {
+            return null;
+        }
+        String greeting = homeGreeting();
+        if (greeting.length() == 0) return null;
+        if (HOME_GREETING_MATCH_LOGGED.compareAndSet(false, true)) {
+            Main.log("home greeting applied resource=0x" + Integer.toHexString(id)
+                    + " length=" + greeting.length());
+        }
+        return greeting;
+    }
+
+    private static boolean isHostWelcomeText(String text) {
+        if (text == null || text.length() == 0) return false;
+        ensureHomeGreetingPatterns();
+        String title = hostWelcomeTitleText;
+        if (title.length() > 0 && title.equals(text)) return true;
+        String pattern = hostWelcomeMessagePattern;
+        if (pattern.length() == 0) return false;
+        int marker = pattern.indexOf("%1$s");
+        int markerLength = 4;
+        if (marker < 0) {
+            marker = pattern.indexOf("%s");
+            markerLength = 2;
+        }
+        if (marker < 0) return pattern.equals(text);
+        String prefix = pattern.substring(0, marker);
+        String suffix = pattern.substring(marker + markerLength);
+        return text.length() > prefix.length() + suffix.length()
+                && text.startsWith(prefix) && text.endsWith(suffix);
+    }
+
+    private static void ensureHomeGreetingPatterns() {
+        if (hostWelcomeMessagePattern.length() > 0
+                && hostWelcomeTitleText.length() > 0) return;
+        Context context = Main.hostApplicationContext;
+        if (context == null) return;
+        try {
+            hostWelcomeMessagePattern = context.getResources()
+                    .getText(hostWelcomeMessageResourceId).toString();
+            hostWelcomeTitleText = context.getResources()
+                    .getText(hostWelcomeTitleResourceId).toString();
+        } catch (Throwable ignored) {}
+    }
+
+    private final AtomicBoolean NATIVE_DUAL_ROOT_HOOK_INSTALLED = new AtomicBoolean(false);
+
+    /** Captures only DeepSeek MainActivity's own root Compose lambda, never a module surface. */
+    void hookNativeDualChatRoot(final ClassLoader cl) {
+        if (!NATIVE_DUAL_ROOT_HOOK_INSTALLED.compareAndSet(false, true)) return;
+        try {
+            Class<?> compose = cl.loadClass("androidx.compose.ui.platform.ComposeView");
+            int installed = 0;
+            for (Method method : compose.getDeclaredMethods()) {
+                if (!"setContent".equals(method.getName())
+                        || method.getParameterTypes().length != 1) continue;
+                Main.MODULE.hook(method).intercept(new Hooker() {
+                    @Override public Object intercept(Chain chain) throws Throwable {
+                        try {
+                            Object owner = chain.getThisObject();
+                            Object content = chain.getArg(0);
+                            if (owner instanceof View && !NativeDualChatBridge.isBuilding()) {
+                                Activity activity = null;
+                                Context current = ((View) owner).getContext();
+                                while (current instanceof ContextWrapper) {
+                                    if (current instanceof Activity) {
+                                        activity = (Activity) current;
+                                        break;
+                                    }
+                                    current = ((ContextWrapper) current).getBaseContext();
+                                }
+                                if (activity != null) {
+                                    NativeDualChatBridge.capture(activity, content, cl);
+                                }
+                            }
+                        } catch (Throwable error) {
+                            Main.log("native dual root capture skipped: "
+                                    + Main.safeThrowableMessage(error));
+                        }
+                        return chain.proceed();
+                    }
+                });
+                installed++;
+            }
+            Main.log("installed native dual root capture ComposeView.setContent x" + installed);
+        } catch (Throwable error) {
+            NATIVE_DUAL_ROOT_HOOK_INSTALLED.set(false);
+            Main.log("native dual root capture unavailable: " + error);
+        }
+    }
+
+    /**
+     * 2.3.0 Compose reads the message list straight off the tp.a field through the o5 state
+     * lambda (id3.u, case 11), bypassing aq.s(). aq.s() is still filtered for non-Compose
+     * readers; this hook covers the actual render path.
+     */
+    /** Replaces Material3 ColorScheme at its provider boundary; never mutates host singletons. */
+    void hookHostThemeColor(final ClassLoader cl) {
+        try {
+            final Class<?> schemeClass = Class.forName(
+                    HostCompat.isV241() ? "ew1" : "vs1", false, cl);
+            Class<?> providerClass = Class.forName(
+                    HostCompat.isV241() ? "ni5" : "nc5", false, cl);
+            final String[] names = themeColorFieldNames();
+            final Field[] fields = new Field[names.length];
+            for (int i = 0; i < names.length; i++) {
+                fields[i] = schemeClass.getDeclaredField(names[i]);
+                fields[i].setAccessible(true);
+            }
+            Constructor<?> found = null;
+            for (Constructor<?> candidate : schemeClass.getDeclaredConstructors()) {
+                Class<?>[] p = candidate.getParameterTypes();
+                if (p.length != names.length) continue;
+                boolean longs = true;
+                for (Class<?> type : p) if (type != long.class) { longs = false; break; }
+                if (longs) { found = candidate; break; }
+            }
+            if (found == null) throw new NoSuchMethodException(
+                    schemeClass.getName() + "(48 colors)");
+            found.setAccessible(true);
+            final Constructor<?> constructor = found;
+            final Object colorLocal = Class.forName(
+                    HostCompat.isV241() ? "fw1" : "ws1", true, cl)
+                    .getDeclaredField("a").get(null);
+            Method localProvider = schemeClass.getClassLoader().loadClass(
+                    HostCompat.isV241() ? "ce8" : "s58")
+                    .getDeclaredMethod("a", Object.class);
+            localProvider.setAccessible(true);
+            deoptimizeBubbleMethod(localProvider);
+            final boolean[] appliedLogged = new boolean[1];
+            Main.MODULE.hook(localProvider).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    ThemeColorConfig.Value config = ThemeColorConfig.get();
+                    if (!config.enabled || chain.getThisObject() != colorLocal
+                            || chain.getArgs().isEmpty()
+                            || !schemeClass.isInstance(chain.getArg(0))) return chain.proceed();
+                    Object original = chain.getArg(0);
+                    Object replacement = themedColorScheme(
+                            original, fields, constructor, config);
+                    // Compose can retain the original ColorScheme identity in restart scopes.
+                    // Update that live instance as well as forwarding the replacement object.
+                    // The process is restarted whenever this feature is toggled, so disabling
+                    // starts again from an untouched host scheme.
+                    for (Field field : fields) {
+                        field.setLong(original, field.getLong(replacement));
+                    }
+                    Object[] args = chain.getArgs().toArray();
+                    args[0] = original;
+                    if (!appliedLogged[0]) {
+                        appliedLogged[0] = true;
+                        Main.log("theme color applied live primary=0x"
+                                + Long.toHexString(fields[0].getLong(original))
+                                + " surface=0x"
+                                + Long.toHexString(fields[15].getLong(original)));
+                    }
+                    return chain.proceed(args);
+                }
+            });
+            int hooks = 0;
+            for (Method method : providerClass.getDeclaredMethods()) {
+                Class<?>[] p = method.getParameterTypes();
+                if (!Modifier.isStatic(method.getModifiers()) || p.length == 0
+                        || p[0] != schemeClass || !("a".equals(method.getName())
+                        || "b".equals(method.getName()))) continue;
+                method.setAccessible(true);
+                deoptimizeBubbleMethod(method);
+                Main.MODULE.hook(method).intercept(new Hooker() {
+                    @Override public Object intercept(Chain chain) throws Throwable {
+                        ThemeColorConfig.Value config = ThemeColorConfig.get();
+                        if (!config.enabled || chain.getArgs().isEmpty()) return chain.proceed();
+                        Object original = chain.getArg(0);
+                        if (original == null) return chain.proceed();
+                        try {
+                            Object replacement = themedColorScheme(
+                                    original, fields, constructor, config);
+                            Object[] args = chain.getArgs().toArray();
+                            args[0] = replacement;
+                            return chain.proceed(args);
+                        } catch (Throwable error) {
+                            Main.log("theme color apply failed: " + Main.safeThrowableMessage(error));
+                            return chain.proceed();
+                        }
+                    }
+                });
+                hooks++;
+            }
+            Main.log("theme color hook ready providers=" + hooks);
+            hookHostThemeDrawColors(cl);
+        } catch (Throwable error) {
+            Main.log("theme color hook unavailable: " + Main.safeThrowableMessage(error));
+        }
+    }
+
+    private void hookHostThemeDrawColors(final ClassLoader cl) {
+        try {
+            final boolean[] settingsBackgroundLogged = new boolean[1];
+            final boolean[] settingsSurfaceLogged = new boolean[1];
+            final Class<?> modifier = Class.forName(
+                    HostCompat.isV241() ? "mv5" : "sp5", false, cl);
+            final Class<?> shape = Class.forName(
+                    HostCompat.isV241() ? "sw7" : "ro7", false, cl);
+            Class<?> backgroundOwner = Class.forName(
+                    HostCompat.isV241() ? "bu9" : "wf9", false, cl);
+            Method background = null;
+            for (Method method : backgroundOwner.getDeclaredMethods()) {
+                Class<?>[] p = method.getParameterTypes();
+                if (Modifier.isStatic(method.getModifiers()) && p.length == 3
+                        && p[0] == modifier && p[1] == long.class && p[2] == shape) {
+                    background = method;
+                    break;
+                }
+            }
+            if (background != null) {
+                background.setAccessible(true);
+                deoptimizeBubbleMethod(background);
+                Main.MODULE.hook(background).intercept(new Hooker() {
+                    @Override public Object intercept(Chain chain) throws Throwable {
+                        ThemeColorConfig.Value config = ThemeColorConfig.get();
+                        if (!config.enabled || chain.getArgs().size() < 2) return chain.proceed();
+                        Object[] args = chain.getArgs().toArray();
+                        if (Boolean.TRUE.equals(NATIVE_SETTINGS_ROOT.get())
+                                && !settingsBackgroundLogged[0]) {
+                            settingsBackgroundLogged[0] = true;
+                            Main.log("theme settings background source=0x" + Long.toHexString(
+                                    ((Number) args[1]).longValue()));
+                        }
+                        args[1] = Long.valueOf(remapHostDrawColor(
+                                ((Number) args[1]).longValue(), config));
+                        return chain.proceed(args);
+                    }
+                });
+            }
+
+            Class<?> surfaceOwner = Class.forName(
+                    HostCompat.isV241() ? "mt4" : "fh0", false, cl);
+            int surfaceHooks = 0;
+            for (Method method : surfaceOwner.getDeclaredMethods()) {
+                Class<?>[] p = method.getParameterTypes();
+                if (!Modifier.isStatic(method.getModifiers()) || p.length != 7
+                        || p[0] != modifier || p[1] != shape
+                        || p[2] != long.class || p[3] != long.class) continue;
+                method.setAccessible(true);
+                deoptimizeBubbleMethod(method);
+                Main.MODULE.hook(method).intercept(new Hooker() {
+                    @Override public Object intercept(Chain chain) throws Throwable {
+                        ThemeColorConfig.Value config = ThemeColorConfig.get();
+                        if (!config.enabled || chain.getArgs().size() < 4) return chain.proceed();
+                        Object[] args = chain.getArgs().toArray();
+                        if (Boolean.TRUE.equals(NATIVE_SETTINGS_ROOT.get())
+                                && !settingsSurfaceLogged[0]) {
+                            settingsSurfaceLogged[0] = true;
+                            Main.log("theme settings surface source=0x" + Long.toHexString(
+                                    ((Number) args[2]).longValue()));
+                        }
+                        long mapped = remapHostDrawColor(
+                                ((Number) args[2]).longValue(), config);
+                        args[2] = Long.valueOf(mapped);
+                        int mappedArgb = (int) (mapped >>> 32);
+                        if (Color.alpha(mappedArgb) > 0) {
+                            args[3] = Long.valueOf((((long) contrastColor(mappedArgb))
+                                    & 0xFFFFFFFFL) << 32);
+                        }
+                        return chain.proceed(args);
+                    }
+                });
+                surfaceHooks++;
+            }
+            Main.log("theme draw hooks ready background=" + (background != null)
+                    + " surfaces=" + surfaceHooks);
+        } catch (Throwable error) {
+            Main.log("theme draw hooks unavailable: " + Main.safeThrowableMessage(error));
+        }
+    }
+
+    private static long remapHostDrawColor(long packed, ThemeColorConfig.Value config) {
+        if ((packed & 63L) != 0L) return packed; // keep non-sRGB wide-gamut colors intact
+        int argb = (int) (packed >>> 32);
+        int alpha = Color.alpha(argb);
+        if (alpha == 0) return packed;
+        int r = Color.red(argb), g = Color.green(argb), b = Color.blue(argb);
+        int spread = Math.max(r, Math.max(g, b)) - Math.min(r, Math.min(g, b));
+        int result;
+        if (spread <= 22) {
+            float luminance = colorLuminance(argb);
+            int neutral = luminance < 0.5f ? 0xFF101116 : 0xFFF9F9FC;
+            result = Main.mixColor(neutral, config.primary, luminance < 0.5f ? 0.25f : 0.22f);
+        } else {
+            result = config.primary;
+        }
+        result = (result & 0x00FFFFFF) | (alpha << 24);
+        return (((long) result) & 0xFFFFFFFFL) << 32;
+    }
+
+    private static String[] themeColorFieldNames() {
+        String[] names = new String[48];
+        for (int i = 0; i < 26; i++) names[i] = String.valueOf((char) ('a' + i));
+        for (int i = 26; i < 48; i++) names[i] = String.valueOf((char) ('A' + i - 26));
+        return names;
+    }
+
+    private static Object themedColorScheme(Object original, Field[] fields,
+            Constructor<?> constructor, ThemeColorConfig.Value config) throws Throwable {
+        Object[] values = new Object[fields.length];
+        int[] colors = new int[fields.length];
+        for (int i = 0; i < fields.length; i++) {
+            long packed = fields[i].getLong(original);
+            values[i] = Long.valueOf(packed);
+            colors[i] = (int) (packed >>> 32);
+        }
+        boolean dark = colorLuminance(colors[15]) < 0.42f;
+        int primary = config.primary | 0xFF000000;
+        int secondary = (config.gradient ? config.secondary : Main.mixColor(primary,
+                dark ? 0xFFFFFFFF : 0xFF000000, 0.16f)) | 0xFF000000;
+        int tertiary = Main.mixColor(primary, secondary, 0.5f);
+        int primaryContainer = Main.mixColor(primary, dark ? 0xFF000000 : 0xFFFFFFFF,
+                dark ? 0.55f : 0.78f);
+        int secondaryContainer = Main.mixColor(secondary, dark ? 0xFF000000 : 0xFFFFFFFF,
+                dark ? 0.55f : 0.78f);
+        int tertiaryContainer = Main.mixColor(tertiary, dark ? 0xFF000000 : 0xFFFFFFFF,
+                dark ? 0.55f : 0.78f);
+        setThemeRole(values, 0, primary);
+        setThemeRole(values, 1, contrastColor(primary));
+        setThemeRole(values, 2, primaryContainer);
+        setThemeRole(values, 3, contrastColor(primaryContainer));
+        setThemeRole(values, 4, Main.mixColor(primary, 0xFFFFFFFF, 0.28f));
+        setThemeRole(values, 5, secondary);
+        setThemeRole(values, 6, contrastColor(secondary));
+        setThemeRole(values, 7, secondaryContainer);
+        setThemeRole(values, 8, contrastColor(secondaryContainer));
+        setThemeRole(values, 9, tertiary);
+        setThemeRole(values, 10, contrastColor(tertiary));
+        setThemeRole(values, 11, tertiaryContainer);
+        setThemeRole(values, 12, contrastColor(tertiaryContainer));
+        // DeepSeek uses neutral Material surfaces much more often than primary buttons.
+        // Tint the complete surface ladder so changing the theme is visible throughout
+        // the host instead of affecting only a handful of accent controls.
+        int baseSurface = dark ? 0xFF111217 : 0xFFF9F9FC;
+        int themedSurface = Main.mixColor(baseSurface, primary, dark ? 0.24f : 0.20f);
+        int themedVariant = Main.mixColor(baseSurface, secondary, dark ? 0.30f : 0.25f);
+        setThemeRole(values, 13, themedSurface); // background
+        setThemeRole(values, 14, contrastColor(themedSurface));
+        setThemeRole(values, 15, themedSurface); // surface
+        setThemeRole(values, 16, contrastColor(themedSurface));
+        setThemeRole(values, 17, themedVariant);
+        setThemeRole(values, 18, contrastColor(themedVariant));
+        setThemeRole(values, 19, primary); // surfaceTint
+        setThemeRole(values, 29, Main.mixColor(themedSurface, 0xFFFFFFFF, dark ? 0.08f : 0.02f));
+        setThemeRole(values, 30, Main.mixColor(themedSurface, 0xFF000000, dark ? 0.03f : 0.07f));
+        setThemeRole(values, 31, Main.mixColor(themedSurface, primary, 0.07f));
+        setThemeRole(values, 32, Main.mixColor(themedSurface, primary, 0.11f));
+        setThemeRole(values, 33, Main.mixColor(themedSurface, primary, 0.15f));
+        setThemeRole(values, 34, Main.mixColor(themedSurface, 0xFFFFFFFF, dark ? 0.04f : 0.01f));
+        setThemeRole(values, 35, Main.mixColor(themedSurface, 0xFF000000, dark ? 0.05f : 0.025f));
+        int[] fixed = {36,37,38,39};
+        for (int index : fixed) setThemeRole(values, index,
+                index == 38 || index == 39 ? contrastColor(primary)
+                        : Main.mixColor(primary, 0xFFFFFFFF, index == 36 ? 0.64f : 0.42f));
+        int[] secondaryFixed = {40,41,42,43};
+        for (int index : secondaryFixed) setThemeRole(values, index,
+                index == 42 || index == 43 ? contrastColor(secondary)
+                        : Main.mixColor(secondary, 0xFFFFFFFF, index == 40 ? 0.64f : 0.42f));
+        int[] tertiaryFixed = {44,45,46,47};
+        for (int index : tertiaryFixed) setThemeRole(values, index,
+                index == 46 || index == 47 ? contrastColor(tertiary)
+                        : Main.mixColor(tertiary, 0xFFFFFFFF, index == 44 ? 0.64f : 0.42f));
+        return constructor.newInstance(values);
+    }
+
+    private static void setThemeRole(Object[] values, int index, int argb) {
+        values[index] = Long.valueOf((((long) argb) & 0xFFFFFFFFL) << 32);
+    }
+
+    private static int contrastColor(int color) {
+        return colorLuminance(color) > 0.53f ? 0xFF111114 : 0xFFFFFFFF;
+    }
+
+    private static float colorLuminance(int color) {
+        float r = Color.red(color) / 255f, g = Color.green(color) / 255f,
+                b = Color.blue(color) / 255f;
+        return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+    }
+
+    void hookSettingsNavigation(ClassLoader cl) {
+        try {
+            Class<?> nav = HostCompat.load(cl, "rm5");
+            for (Method m : nav.getDeclaredMethods()) {
+                if (!m.getName().equals("n") || m.getParameterTypes().length != 2) continue;
+                Main.MODULE.hook(m).intercept(new Hooker() {
+                    @Override public Object intercept(Chain chain) throws Throwable {
+                        Object r = chain.proceed();
+                        rememberNavController(chain.getThisObject());
+                        Main.MODULE.scheduleRouteCheck(chain.getThisObject());
+                        return r;
+                    }
+                });
+                Main.log("hooked nav route rm5.n");
+                break;
+            }
+            hookNavStateMethod(nav, "b");
+            hookNavStateMethod(nav, "m");
+            hookNavStateMethod(nav, "q");
+            hookNavStateMethod(nav, "r");
+            hookNavStateMethod(nav, "u");
+        } catch (Throwable t) { Main.log("hook nav route failed: " + t); }
+
+        try {
+            Class<?> gf8 = HostCompat.load(cl, "gf8");
+            for (Method m : gf8.getDeclaredMethods()) {
+                if (!m.getName().equals("A0") || m.getParameterTypes().length != 1) continue;
+                Main.MODULE.hook(m).intercept(new Hooker() {
+                    @Override public Object intercept(Chain chain) throws Throwable {
+                        Object r = chain.proceed();
+                        Object nav = chain.getArg(0);
+                        if (nav != null) {
+                            rememberNavController(nav);
+                            Main.MODULE.scheduleRouteCheck(nav);
+                        } else {
+                            Main.MODULE.main.post(new Runnable() {
+                                public void run() {
+                                    ChatAppearance.onRouteChanged(Main.MODULE.curAct.get(), null);
+                                    Main.MODULE.hideButton();
+                                }
+                            });
+                        }
+                        return r;
+                    }
+                });
+                Main.log("hooked nav pop gf8.A0");
+                break;
+            }
+        } catch (Throwable t) { Main.log("hook nav pop failed: " + t); }
+    }
+
+    private void hookNavStateMethod(Class<?> nav, String name) {
+        int count = 0;
+        for (Method m : nav.getDeclaredMethods()) {
+            if (!m.getName().equals(name)) continue;
+            Main.MODULE.hook(m).intercept(new Hooker() {
+                @Override public Object intercept(Chain chain) throws Throwable {
+                    Object r = chain.proceed();
+                    rememberNavController(chain.getThisObject());
+                    Main.MODULE.scheduleRouteCheck(chain.getThisObject());
+                    return r;
+                }
+            });
+            count++;
+        }
+        Main.log("hooked nav state rm5." + name + " x" + count);
+    }
+
+    private void rememberNavController(Object nav) {
+        if (nav != null) Main.MODULE.navController = new WeakReference<>(nav);
+    }
+}

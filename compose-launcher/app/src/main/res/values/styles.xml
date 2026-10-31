@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Full-screen, non-floating dialog theme for the Miuix page hosted inside DeepSeek.
+         Mirrors the approach used by WeType UI Enhanced: without windowIsFloating=false and
+         backgroundDimEnabled=false the dialog window silently fails to render the Compose tree
+         inside the host process. -->
+    <style name="Theme.DeePX.HostDialog" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation</item>
+    </style>
+
+    <!-- Window animation for the hosted page Dialog: a traditional Activity-style horizontal
+         push (in from the right, out to the left) when opening, and the reverse when closing. -->
+    <style name="Animation.DeePX.HostPage" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/host_page_in_right</item>
+        <item name="android:activityOpenExitAnimation">@anim/host_page_out_left</item>
+        <item name="android:activityCloseEnterAnimation">@anim/host_page_in_left</item>
+        <item name="android:activityCloseExitAnimation">@anim/host_page_out_right</item>
+    </style>
+</resources>

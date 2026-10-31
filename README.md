@@ -3,7 +3,7 @@
 DeePX is an independent LSPosed/Xposed module for the official DeepSeek Android app. It runs inside
 the DeepSeek process and provides a module settings entry, a Miuix-styled host UI and feature
 enhancements. It is based on [Deekseep LSPosed](https://github.com/lllucccian/Deekseep) and now
-targets **DeepSeek 2.7.1** (and stays compatible with 2.5.3 / 2.5.2 / 2.4.1). It is not made by or affiliated with DeepSeek.
+targets **DeepSeek 2.5.3**. It is not made by or affiliated with DeepSeek.
 
 [简体中文](README_CN.md) | [Changelog](CHANGELOG.md)
 
@@ -31,12 +31,7 @@ it.
 ## Current Version
 
 - Module version: **1.0.0 Beta (20260926)**
-- Hosts (Mainland DeepSeek):
-  - **2.7.1** (versionName 2.7.1 / versionCode 287) ← current mainline
-  - 2.5.3 (versionName 2.5.3 / versionCode 275)
-  - 2.5.2 (versionCode 273)
-  - 2.4.1 (versionCode 257)
-  - 2.3.6 / 2.3.4 / 2.3.0
+- Host: Mainland DeepSeek **2.5.3** (versionName 2.5.3 / versionCode 275)
 - Build config: `minSdk 24`, `targetSdk 37`, `compileSdk 37`
 
 ## Requirements

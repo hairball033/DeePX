@@ -1,0 +1,1137 @@
+package com.smallhairball.deepx.ui
+
+import android.app.Activity
+import android.app.Dialog
+import android.content.Context
+import android.content.pm.ApplicationInfo
+import android.content.res.AssetManager
+import android.content.res.Configuration
+import android.content.res.Resources
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.os.Handler
+import android.os.Looper
+import android.view.ContextThemeWrapper
+import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import androidx.activity.ComponentDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Forum
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Gavel
+import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.HelpOutline
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Style
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import top.yukonga.miuix.kmp.basic.Scaffold
+import androidx.compose.ui.platform.ComposeView
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.theme.darkColorScheme
+import top.yukonga.miuix.kmp.theme.lightColorScheme
+import java.util.WeakHashMap
+
+private const val MODULE_PACKAGE_NAME = "com.smallhairball.deepx"
+private const val REPOSITORY_URL = "https://github.com/hairball033/DeePX"
+private val activeHostDialogs = WeakHashMap<Activity, ComponentDialog>()
+private val moduleResourcesCache = HashMap<String, Resources>()
+private val homeBackDispatchers = WeakHashMap<Activity, Any>()
+
+/**
+ * Parasitic Compose host: shows a full-screen Miuix page inside the injected DeepSeek process.
+ *
+ * Mirrors the approach proven by WeType UI Enhanced: create a package context for our own module
+ * APK with CONTEXT_INCLUDE_CODE so the module ClassLoader (which carries Compose and Miuix from
+ * the merged launcher artifact) is usable inside the host, then host a ComposeView inside a
+ * full-screen ComponentDialog.
+ */
+object DeePXHostLauncher {
+
+    /**
+     * Replaces the content of an already-creatable host Dialog with the Compose/Miuix home page.
+     * Unlike [show] this does not create its own Dialog; it reuses the legacy page Dialog that the
+     * View code built, which is the surest way to render Compose inside the injected process.
+     *
+     * @return true when Compose took over the content, false to let the caller keep the View tree.
+     */
+    @JvmStatic
+    fun attachHomePage(
+        activity: Activity,
+        dialog: Dialog,
+        dark: Boolean,
+        handler: java.util.function.Consumer<String>?,
+    ): Boolean {
+        log("attachHomePage() entered, activity=" + activity.javaClass.name
+                + ", dialog=" + dialog.javaClass.name)
+        val info = buildHomeInfo(activity, handler != null)
+
+        // Candidate contexts, best-effort. Even if we cannot resolve the module package context we
+        // can still try the host Activity: Miuix draws almost everything in code, so the host
+        // resources may be enough. Each candidate is tried until one renders.
+        val candidates = ArrayList<Context>(3)
+        resolveModuleContext(activity)?.let {
+            candidates.add(ModuleHostContext(activity, it))
+        }
+        candidates.add(activity)
+        candidates.add(dialog.context)
+
+        for (candidate in candidates) {
+            try {
+                var backOwner: HostLifecycleOwner? = null
+                val composeView = ComposeView(candidate).apply {
+                    // The legacy page Dialog is a plain android.app.Dialog, which does not provide
+                    // ViewTreeLifecycleOwner / SavedStateRegistryOwner / ViewModelStoreOwner to the
+                    // Compose content. Without these ComposeView throws "ViewTreeLifecycleOwner not
+                    // found" when it attaches to the window. Install lightweight owners on the view.
+                    backOwner = installComposeViewTreeOwners(this)
+                    setContent {
+                        MiuixTestApp(
+                            info = info,
+                            onEntry = { id -> handler?.accept(id) },
+                            onClose = { runCatching { dialog.dismiss() } },
+                        )
+                    }
+                }
+                // Route hardware/gesture back into Compose first; when nothing intercepts, close
+                // the whole page dialog.
+                backOwner?.onBackPressedDispatcher?.addCallback(
+                    object : androidx.activity.OnBackPressedCallback(true) {
+                        override fun handleOnBackPressed() {
+                            runCatching { dialog.dismiss() }
+                        }
+                    }
+                )
+                homeBackDispatchers[activity] = backOwner
+                dialog.setContentView(
+                    composeView,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                )
+                log("attachHomePage: Compose attached with ${candidate.javaClass.name}")
+                return true
+            } catch (t: Throwable) {
+                log("attachHomePage: candidate ${candidate.javaClass.name} failed: " + t)
+            }
+        }
+        log("attachHomePage: all candidates failed, fall back to View")
+        return false
+    }
+
+    /**
+     * Hosts the "执行" (task console) page with Miuix inside the injected process, mirroring the
+     * legacy full-screen console: back/save actions in the top bar, a monospace auto-scrolling log
+     * and a close button that only unlocks once the job finished. The job itself is started by the
+     * Java side ({@code TaskConsoleBridge}); this only draws it and polls its snapshot.
+     *
+     * @return true when Compose took over, false to let the caller keep the View console.
+     */
+    @JvmStatic
+    fun attachTaskConsole(
+        activity: Activity,
+        dialog: Dialog,
+        dark: Boolean,
+        title: String,
+        hint: String,
+    ): Boolean {
+        log("attachTaskConsole() entered, title=" + title)
+        // The caller owns the Dialog (theme, edge-to-edge system bars, push/pop window animation),
+        // exactly like the Miuix home page reuses the Dialog the View code built. This only replaces
+        // its content view; the caller shows it afterwards.
+        try {
+            val composeView = ComposeView(ResourceFallbackContext(activity)).apply {
+                installComposeViewTreeOwners(this)
+                setContent {
+                    MiuixTheme(colors = if (dark) darkColorScheme() else lightColorScheme()) {
+                        val navOwner =
+                            androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner(
+                                enabled = true,
+                                parent = null,
+                            )
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+                                provides navOwner
+                        ) {
+                            // A Scaffold provides the MiuixPopupHost that the page may need.
+                            Scaffold(
+                                modifier = Modifier.fillMaxSize(),
+                                contentWindowInsets =
+                                    androidx.compose.foundation.layout.WindowInsets(0),
+                            ) { _ ->
+                                TaskConsoleScreen(
+                                    fallbackTitle = title,
+                                    fallbackHint = hint,
+                                    onClose = { runCatching { dialog.dismiss() } },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            dialog.setContentView(
+                composeView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            log("attachTaskConsole: Compose attached")
+            return true
+        } catch (t: Throwable) {
+            // Leave the Dialog intact: the caller falls back to its View console and shows it.
+            log("attachTaskConsole: Compose attach failed: " + t)
+            return false
+        }
+    }
+
+    /**
+     * Shows the DeePX announcement with Miuix inside the host process. Returns false when Compose
+     * could not be attached so the caller can fall back to the legacy View dialog.
+     *
+     * <p>Separate from [showConfirmDialog] on purpose: there an outside tap maps to the negative
+     * action, so the "不再提醒" bookkeeping would be written by an accidental tap. Here only the
+     * button does that; [onMute] runs after the close animation finished.
+     */
+    @JvmStatic
+    fun showAnnouncementDialog(
+        activity: Activity,
+        title: String,
+        body: String,
+        onMute: Runnable?,
+    ): Boolean {
+        log("showAnnouncementDialog() entered")
+        val dialog = try {
+            Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar).apply {
+                requestWindowFeature(Window.FEATURE_NO_TITLE)
+                setCanceledOnTouchOutside(true)
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        val dark = try {
+            (activity.resources.configuration.uiMode and
+                Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+        } catch (t: Throwable) {
+            false
+        }
+        try {
+            val composeView = ComposeView(ResourceFallbackContext(activity)).apply {
+                installComposeViewTreeOwners(this)
+                setContent {
+                    MiuixTheme(colors = if (dark) darkColorScheme() else lightColorScheme()) {
+                        val navOwner =
+                            androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner(
+                                enabled = true,
+                                parent = null,
+                            )
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+                                provides navOwner
+                        ) {
+                            // A Scaffold provides the MiuixPopupHost that OverlayDialog needs. Its container colour paints
+                            // the whole window, so it must be transparent: the announcement is a dialog
+                            // over the host page, not a page of its own.
+                            Scaffold(
+                                modifier = Modifier.fillMaxSize(),
+                                containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                contentWindowInsets =
+                                    androidx.compose.foundation.layout.WindowInsets(0),
+                            ) { _ ->
+                                AnnouncementDialog(
+                                    title = title,
+                                    body = body,
+                                    onDismissDialog = { runCatching { dialog.dismiss() } },
+                                    onMute = { runCatching { onMute?.run() } },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            dialog.setContentView(
+                composeView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            dialog.show()
+            dialog.window?.let { window ->
+                window.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                // This window covers the system bars, and the module app process has no Xposed hook
+                // to fall back on, so make it transparent here explicitly.
+                applyEdgeToEdgeWindow(window, dark)
+            }
+            log("showAnnouncementDialog: Compose attached")
+            return true
+        } catch (t: Throwable) {
+            log("showAnnouncementDialog: Compose attach failed: " + t)
+            runCatching { dialog.dismiss() }
+            return false
+        }
+    }
+
+    /**
+     * Shows a Material 3 [androidx.compose.material3.AlertDialog] inside the host process by
+     * hosting it in a translucent Dialog. Returns false when Compose could not be attached so the
+     * caller can fall back to the legacy View-based AlertDialog.
+     *
+     * @param onGithub invoked when the "GitHub" action is tapped; the dialog dismisses itself first.
+     */
+    @JvmStatic
+    fun showLicenseDialog(
+        activity: Activity,
+        title: String,
+        body: String,
+        githubLabel: String,
+        closeLabel: String,
+        dark: Boolean,
+        onGithub: Runnable,
+    ): Boolean {
+        log("showLicenseDialog() entered, activity=" + activity.javaClass.name)
+        val dialog = try {
+            Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar).apply {
+                requestWindowFeature(Window.FEATURE_NO_TITLE)
+                setCanceledOnTouchOutside(true)
+            }
+        } catch (t: Throwable) {
+            log("showLicenseDialog: Dialog creation failed: " + t)
+            return false
+        }
+        try {
+            val composeView = ComposeView(ResourceFallbackContext(activity)).apply {
+                installComposeViewTreeOwners(this)
+                setContent {
+                    LicenseAlertDialog(
+                        title = title,
+                        body = body,
+                        githubLabel = githubLabel,
+                        closeLabel = closeLabel,
+                        dark = dark,
+                        onGithub = {
+                            runCatching { dialog.dismiss() }
+                            runCatching { onGithub.run() }
+                        },
+                        onClose = { runCatching { dialog.dismiss() } },
+                    )
+                }
+            }
+            dialog.setContentView(
+                composeView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            dialog.show()
+            dialog.window?.let { window ->
+                window.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                window.setDimAmount(0.32f)
+                window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                // Transparent system bars: this window covers them, and the module app process has no
+                // Xposed hook to fall back on.
+                applyEdgeToEdgeWindow(window, dark)
+            }
+            log("showLicenseDialog: Compose attached")
+            return true
+        } catch (t: Throwable) {
+            log("showLicenseDialog: Compose attach failed: " + t)
+            runCatching { dialog.dismiss() }
+            return false
+        }
+    }
+
+    /**
+     * Shows a Miuix confirm dialog inside the host process. Returns false when Compose could not be
+     * attached so the caller can fall back to the legacy View dialog.
+     */
+    @JvmStatic
+    fun showConfirmDialog(
+        activity: Activity,
+        title: String,
+        message: String,
+        negativeLabel: String?,
+        positiveLabel: String,
+        onNegative: Runnable?,
+        onPositive: Runnable?,
+        verticalButtons: Boolean,
+    ): Boolean {
+        log("showConfirmDialog() entered, title=" + title)
+        val dialog = try {
+            Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar).apply {
+                requestWindowFeature(Window.FEATURE_NO_TITLE)
+                setCanceledOnTouchOutside(true)
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        val dark = try {
+            (activity.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        } catch (t: Throwable) {
+            false
+        }
+        try {
+            val composeView = ComposeView(ResourceFallbackContext(activity)).apply {
+                installComposeViewTreeOwners(this)
+                setContent {
+                    MiuixTheme(colors = if (dark) darkColorScheme() else lightColorScheme()) {
+                        val navOwner = androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner(
+                            enabled = true,
+                            parent = null,
+                        )
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+                                provides navOwner
+                        ) {
+                            // A Scaffold provides the MiuixPopupHost that OverlayDialog needs. Keep its
+                            // container transparent so the page behind the dim stays visible.
+                            Scaffold(
+                                modifier = Modifier.fillMaxSize(),
+                                containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
+                            ) { _ ->
+                                ConfirmDialog(
+                                    title = title,
+                                    message = message,
+                                    negativeLabel = negativeLabel,
+                                    positiveLabel = positiveLabel,
+                                    verticalButtons = verticalButtons,
+                                    onDismissDialog = { runCatching { dialog.dismiss() } },
+                                    onNegative = { runCatching { onNegative?.run() } },
+                                    onPositive = { runCatching { onPositive?.run() } },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            dialog.setContentView(
+                composeView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            dialog.show()
+            dialog.window?.let { window ->
+                window.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                window.setDimAmount(0.48f)
+                window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                // Transparent system bars. This is also the window the remote update prompt uses, and
+                // in the module app process there is no Xposed hook to fix it for us.
+                applyEdgeToEdgeWindow(window, dark)
+            }
+            log("showConfirmDialog: Compose attached")
+            return true
+        } catch (t: Throwable) {
+            log("showConfirmDialog: Compose attach failed: " + t)
+            runCatching { dialog.dismiss() }
+            return false
+        }
+    }
+
+    /**
+     * Shows the FORCED update gate with Miuix: single primary action, no outside/back dismissal,
+     * and the download jump keeps the gate on screen until the app is actually updated. Returns
+     * false when Compose could not be attached so the caller can fall back to a strict View dialog.
+     */
+    @JvmStatic
+    fun showForceUpdateDialog(
+        activity: Activity,
+        title: String,
+        message: String,
+        positiveLabel: String,
+        onPositive: Runnable?,
+    ): Boolean {
+        log("showForceUpdateDialog() entered, title=" + title)
+        val dialog = try {
+            Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar).apply {
+                requestWindowFeature(Window.FEATURE_NO_TITLE)
+                setCanceledOnTouchOutside(false)
+                setCancelable(false)
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        val dark = try {
+            (activity.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        } catch (t: Throwable) {
+            false
+        }
+        try {
+            val composeView = ComposeView(ResourceFallbackContext(activity)).apply {
+                installComposeViewTreeOwners(this)
+                setContent {
+                    MiuixTheme(colors = if (dark) darkColorScheme() else lightColorScheme()) {
+                        val navOwner = androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner(
+                            enabled = true,
+                            parent = null,
+                        )
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+                                provides navOwner
+                        ) {
+                            Scaffold(
+                                modifier = Modifier.fillMaxSize(),
+                                containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
+                            ) { _ ->
+                                ConfirmDialog(
+                                    title = title,
+                                    message = message,
+                                    negativeLabel = null,
+                                    positiveLabel = positiveLabel,
+                                    verticalButtons = true,
+                                    onDismissDialog = { },
+                                    onNegative = { },
+                                    onPositive = { runCatching { onPositive?.run() } },
+                                    dismissible = false,
+                                    keepOpenOnPositive = true,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            dialog.setContentView(
+                composeView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            dialog.show()
+            dialog.window?.let { window ->
+                window.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                window.setDimAmount(0.6f)
+                window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                applyEdgeToEdgeWindow(window, dark)
+            }
+            log("showForceUpdateDialog: Compose attached")
+            return true
+        } catch (t: Throwable) {
+            log("showForceUpdateDialog: Compose attach failed: " + t)
+            runCatching { dialog.dismiss() }
+            return false
+        }
+    }
+    /**
+     * Shows a Miuix "processing" dialog inside the host process: a title, an indeterminate progress
+     * indicator and stage labels that cycle on a timer. When the timer finishes the dialog closes
+     * itself and [onFinished] runs. Returns false when Compose could not be attached.
+     */
+    @JvmStatic
+    fun showProgressDialog(
+        activity: Activity,
+        title: String,
+        stages: Array<String>,
+        stageIntervalMs: Long,
+        onFinished: Runnable?,
+    ): Boolean {
+        log("showProgressDialog() entered, title=" + title)
+        val dialog = try {
+            Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar).apply {
+                requestWindowFeature(Window.FEATURE_NO_TITLE)
+                setCanceledOnTouchOutside(false)
+                setCancelable(false)
+            }
+        } catch (t: Throwable) {
+            return false
+        }
+        val dark = try {
+            (activity.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        } catch (t: Throwable) {
+            false
+        }
+        val handler = Handler(Looper.getMainLooper())
+        val total = (stages.size.coerceAtLeast(1)) * stageIntervalMs
+        val closeListener = object : android.content.DialogInterface.OnDismissListener {
+            override fun onDismiss(d: android.content.DialogInterface?) {
+                runCatching { onFinished?.run() }
+            }
+        }
+        try {
+            val composeView = ComposeView(ResourceFallbackContext(activity)).apply {
+                installComposeViewTreeOwners(this)
+                setContent {
+                    MiuixTheme(colors = if (dark) darkColorScheme() else lightColorScheme()) {
+                        val navOwner = androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner(
+                            enabled = true,
+                            parent = null,
+                        )
+                        androidx.compose.runtime.CompositionLocalProvider(
+                            androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+                                provides navOwner
+                        ) {
+                            // A Scaffold provides the MiuixPopupHost that OverlayDialog needs. Keep its
+                            // container transparent so the page behind the dim stays visible.
+                            Scaffold(
+                                modifier = Modifier.fillMaxSize(),
+                                containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0),
+                            ) { _ ->
+                                ProgressDialogContent(
+                                    title = title,
+                                    stages = stages,
+                                    stageIntervalMs = stageIntervalMs,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            dialog.setContentView(
+                composeView,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            dialog.setOnDismissListener(closeListener)
+            dialog.show()
+            dialog.window?.let { window ->
+                window.setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                window.setDimAmount(0.32f)
+                // Transparent system bars: this window covers them, and the module app process has no
+                // Xposed hook to fall back on.
+                applyEdgeToEdgeWindow(window, dark)
+            }
+            // Auto-close after the stage cycle completes.
+            handler.postDelayed({
+                runCatching { dialog.dismiss() }
+            }, total + 400L)
+            log("showProgressDialog: Compose attached")
+            return true
+        } catch (t: Throwable) {
+            log("showProgressDialog: Compose attach failed: " + t)
+            runCatching { dialog.dismiss() }
+            return false
+        }
+    }
+
+    /** Resolves a Context whose resources/classloader belong to our own module APK. */
+    private fun resolveModuleContext(activity: Activity): Context? {
+        runCatching {
+            return activity.createPackageContext(
+                MODULE_PACKAGE_NAME,
+                Context.CONTEXT_IGNORE_SECURITY or Context.CONTEXT_INCLUDE_CODE
+            )
+        }.onFailure { log("resolveModuleContext: createPackageContext(INCLUDE_CODE) failed: " + it) }
+        runCatching {
+            return activity.createPackageContext(
+                MODULE_PACKAGE_NAME,
+                Context.CONTEXT_IGNORE_SECURITY
+            )
+        }.onFailure { log("resolveModuleContext: createPackageContext(IGNORE_SECURITY) failed: " + it) }
+        return createEmbeddedModuleContext(activity).also {
+            log("resolveModuleContext: embedded fallback = " + (it != null))
+        }
+    }
+
+    /**
+     * Routes a back request into the hosted Compose page. The Compose [BackHandler] pops a sub-page
+     * when one is open; otherwise the fallback callback closes the whole dialog.
+     *
+     * @return true when a dispatcher was found (the caller should consume the back event).
+     */
+    @JvmStatic
+    fun dispatchBack(activity: Activity): Boolean {
+        val owner = homeBackDispatchers[activity] as? HostLifecycleOwner ?: return false
+        return runCatching {
+            owner.onBackPressedDispatcher.onBackPressed()
+            true
+        }.getOrDefault(false)
+    }
+
+    @JvmStatic
+    fun show(activity: Activity) {
+        log("show() entered, activity=" + activity.javaClass.name)
+        activeHostDialogs[activity]?.takeIf { it.isShowing }?.let {
+            log("show(): a dialog is already showing, bail out")
+            return
+        }
+
+        val moduleContext = runCatching {
+            activity.createPackageContext(
+                MODULE_PACKAGE_NAME,
+                Context.CONTEXT_IGNORE_SECURITY or Context.CONTEXT_INCLUDE_CODE
+            )
+        }.onFailure {
+            log("createPackageContext(IGNORE_SECURITY|INCLUDE_CODE) failed: " + it)
+        }.recoverCatching {
+            activity.createPackageContext(
+                MODULE_PACKAGE_NAME,
+                Context.CONTEXT_IGNORE_SECURITY
+            )
+        }.onFailure {
+            log("createPackageContext(IGNORE_SECURITY only) failed: " + it)
+        }.getOrElse {
+            log("createPackageContext failed, trying embedded module context")
+            createEmbeddedModuleContext(activity) ?: run {
+                log("createEmbeddedModuleContext returned null, abort")
+                return
+            }
+        }
+        log("module context = " + moduleContext.javaClass.name
+                + ", pkg=" + moduleContext.packageName)
+
+        val dialog = try {
+            ComponentDialog(
+                ModuleHostContext(activity, moduleContext),
+                com.smallhairball.deepx.R.style.Theme_DeePX_HostDialog
+            ).apply {
+                requestWindowFeature(Window.FEATURE_NO_TITLE)
+                setCanceledOnTouchOutside(false)
+                setOnDismissListener {
+                    log("dialog dismissed")
+                    activeHostDialogs.remove(activity)
+                }
+            }
+        } catch (t: Throwable) {
+            log("ComponentDialog creation failed: " + t)
+            return
+        }
+        activeHostDialogs[activity] = dialog
+        val windowBackgroundColor = resolveWindowBackgroundColor(dialog.context)
+
+        val composeView = try {
+            val homeInfo = buildHomeInfo(activity, true)
+            ComposeView(dialog.context).apply {
+                setBackgroundColor(windowBackgroundColor)
+                setContent {
+                    MiuixTestApp(info = homeInfo)
+                }
+            }
+        } catch (t: Throwable) {
+            log("ComposeView creation failed: " + t)
+            return
+        }
+        dialog.setContentView(
+            composeView,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        )
+        try {
+            dialog.show()
+        } catch (t: Throwable) {
+            log("dialog.show() failed: " + t)
+            return
+        }
+        dialog.window?.apply {
+            decorView.setPadding(0, 0, 0, 0)
+            setLayout(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT
+            )
+            statusBarColor = windowBackgroundColor
+            navigationBarColor = windowBackgroundColor
+            setBackgroundDrawable(ColorDrawable(windowBackgroundColor))
+        }
+        log("show() completed; dialog showing=" + dialog.isShowing)
+    }
+
+    /** Collects the values shown on the in-host home page from the module constants and the device. */
+    private fun buildHomeInfo(activity: Activity, withEntries: Boolean): HostHomeInfo {
+        val moduleVersion = runCatching {
+            com.smallhairball.deepx.BuildInfo.DISPLAY_VERSION
+        }.getOrDefault("1.0.0 Beta").orEmpty()
+        val xposedInterface = runCatching {
+            com.smallhairball.deepx.BuildInfo.API_VERSION
+        }.getOrDefault("").orEmpty()
+        val buildDate = runCatching {
+            com.smallhairball.deepx.BuildInfo.BUILD_DATE
+        }.getOrDefault("").orEmpty()
+        val deepSeekVersion = runCatching {
+            val info = activity.packageManager.getPackageInfo(activity.packageName, 0)
+            info.versionName.orEmpty()
+        }.getOrDefault("").orEmpty()
+
+        val deviceRows = listOf(
+            "设备" to (android.os.Build.MANUFACTURER + " " + android.os.Build.MODEL),
+            "系统" to ("Android " + android.os.Build.VERSION.RELEASE),
+            "处理器架构" to android.os.Build.SUPPORTED_ABIS.joinToString(", "),
+            "内核版本" to runCatching { System.getProperty("os.version").orEmpty() }
+                .getOrDefault(""),
+        )
+
+        return HostHomeInfo(
+            active = true,
+            moduleVersion = moduleVersion,
+            xposedInterface = xposedInterface,
+            buildDate = buildDate,
+            deepSeekVersion = deepSeekVersion,
+            deviceRows = deviceRows,
+            entries = if (withEntries) buildEntries() else emptyList(),
+            licenseText = readLicenseText(),
+            repositoryUrl = REPOSITORY_URL,
+        )
+    }
+
+    /**
+     * Reads the bundled GPL text from this module's own classpath. Lives on the classloader that
+     * also carries the module's bundled META-INF resources, so the path matches the Java reader.
+     */
+    private fun readLicenseText(): String = runCatching {
+        val loader = javaClass.classLoader ?: return ""
+        loader.getResourceAsStream("META-INF/com.smallhairball.deepx.project/gpl_3_0.txt")
+            ?.use { it.readBytes().toString(Charsets.UTF_8) }
+            .orEmpty()
+    }.getOrDefault("")
+
+    /** The category entries shown on the home page; ids are forwarded back to Java on tap. */
+    private fun buildEntries(): List<HostEntry> = listOf(
+        HostEntry("chat", "聊天", "消息、会话与聊天记录相关功能",
+            Icons.Outlined.Forum),
+        HostEntry("account", "账号与隐私", "多账号、登录与隐私相关功能",
+            Icons.Rounded.Person),
+        HostEntry("appearance", "界面美化", "主题、气泡、头像与动效",
+            Icons.Rounded.Palette),
+        HostEntry("debug", "调试", "日志、崩溃诊断与网络请求",
+            Icons.Rounded.Build),
+        HostEntry("engineering", "工程", "语言、进程与自动化管理",
+            Icons.Rounded.Style),
+        HostEntry("help", "帮助与问题", "功能说明与常见问题",
+            Icons.Rounded.HelpOutline),
+        HostEntry("license", "开源许可", "GNU General Public License v3.0",
+            Icons.Rounded.Gavel),
+        HostEntry("community", "交流群", "DeePX 模块交流群",
+            Icons.Rounded.Groups),
+        HostEntry(ABOUT_ID, "关于", "模块信息、设备信息与开源说明",
+            Icons.Rounded.Info),
+    )
+
+    /** File logger that does not depend on logcat being readable inside the host process. */
+    private fun log(message: String) {
+        runCatching {
+            val file = java.io.File(
+                "/data/data/com.deepseek.chat/files/deepx_host.log"
+            )
+            java.io.FileWriter(file, true).use { writer ->
+                writer.write(
+                    java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+                        .format(java.util.Date()) + "  " + message + "\n"
+                )
+            }
+        }
+    }
+
+    private fun createEmbeddedModuleContext(activity: Activity): Context? {
+        val moduleApkPath = resolveModuleApkPath(activity) ?: run {
+            log("createEmbeddedModuleContext: module apk path unresolved, abort")
+            return null
+        }
+        log("embedded module apk = $moduleApkPath")
+        val moduleResources = runCatching {
+            synchronized(moduleResourcesCache) {
+                moduleResourcesCache.getOrPut(moduleApkPath) {
+                    val assetManager = AssetManager::class.java.getDeclaredConstructor().newInstance()
+                    val addAssetPath = AssetManager::class.java.getMethod(
+                        "addAssetPath",
+                        String::class.java
+                    )
+                    check(addAssetPath.invoke(assetManager, moduleApkPath) as Int != 0) {
+                        "Failed to add embedded module asset path: $moduleApkPath"
+                    }
+                    Resources(
+                        assetManager,
+                        activity.resources.displayMetrics,
+                        activity.resources.configuration
+                    )
+                }
+            }
+        }.onFailure {
+            log("embedded module resources failed: " + it)
+        }.getOrElse {
+            return null
+        }
+        return EmbeddedModuleContext(activity, moduleResources)
+    }
+
+    private fun resolveModuleApkPath(activity: Activity): String? {
+        val anchorClass = DeePXHostLauncher::class.java
+
+        // 1) ProtectionDomain.codeSource: the standard way an injected module class resolves the
+        //    APK it was loaded from. Mirrors WeType UI Enhanced's ModuleRuntime.
+        val fromCodeSource = runCatching {
+            anchorClass.protectionDomain?.codeSource?.location?.toURI()?.let {
+                java.io.File(it).absolutePath
+            }
+        }.getOrNull()
+        if (isUsableApkPath(fromCodeSource)) return fromCodeSource
+
+        // 2) Class resource lookup: "file:/path/base.apk!/com/...Class.class".
+        val fromResource = runCatching {
+            anchorClass.getResource(anchorClass.simpleName + ".class")
+                ?.toString()
+                ?.substringAfter("file:")
+                ?.substringBefore("!/")
+                ?.takeIf { isUsableApkPath(it) }
+        }.getOrNull()
+        if (isUsableApkPath(fromResource)) return fromResource
+
+        // 3) Last resort: locate our own package via the class loader search paths.
+        val fromSourceDir = runCatching {
+            anchorClass.classLoader
+                ?.let { loader ->
+                    val pathListField = loader.javaClass.getDeclaredField("pathList")
+                    pathListField.isAccessible = true
+                    val pathList = pathListField.get(loader)
+                    val dexElementsField = pathList.javaClass.getDeclaredField("dexElements")
+                    dexElementsField.isAccessible = true
+                    val elements = dexElementsField.get(pathList) as Array<*>
+                    elements.mapNotNull { element ->
+                        runCatching {
+                            val fileField = element!!.javaClass.getDeclaredField("file")
+                            fileField.isAccessible = true
+                            val file = fileField.get(element) as? java.io.File
+                            file?.absolutePath?.substringBefore("!/")
+                        }.getOrNull()
+                    }.firstOrNull { it != null && it.contains("deepx") && isUsableApkPath(it) }
+                }
+        }.getOrNull()
+        if (isUsableApkPath(fromSourceDir)) return fromSourceDir
+
+        // 4) PackageManager: getApplicationInfo().sourceDir. Often blocked by Android 11+ package
+        //    visibility inside the host, but cheap to try.
+        val fromPackageManager = runCatching {
+            activity.packageManager.getApplicationInfo(MODULE_PACKAGE_NAME, 0)?.sourceDir
+        }.getOrNull()
+        if (isUsableApkPath(fromPackageManager)) return fromPackageManager
+
+        // 5) /proc/self/maps scan: LSPosed may keep module classes in an in-memory loader without
+        //    a valid codeSource, but if the module APK is mapped into the process its path shows up
+        //    here. No root required. Mirrors AccountSafetyPrank.readEmbeddedVideo().
+        val fromMaps = runCatching {
+            java.io.BufferedReader(java.io.FileReader("/proc/self/maps")).use { reader ->
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    val text = line ?: continue
+                    val start = text.indexOf('/')
+                    val end = text.indexOf(".apk", start)
+                    if (start >= 0 && end > start) {
+                        val candidate = text.substring(start, end + 4)
+                        if (candidate.contains("smallhairball") && isUsableApkPath(candidate)) {
+                            return@use candidate
+                        }
+                    }
+                }
+                null
+            }
+        }.getOrNull()
+        if (isUsableApkPath(fromMaps)) return fromMaps
+
+        log("resolveModuleApkPath: all strategies failed (codeSource=$fromCodeSource, "
+                + "resource=$fromResource, sourceDir=$fromSourceDir, maps=$fromMaps)")
+        return null
+    }
+
+    private fun isUsableApkPath(path: String?): Boolean {
+        if (path.isNullOrBlank()) return false
+        return runCatching { java.io.File(path).exists() && java.io.File(path).isFile }.getOrDefault(false)
+    }
+
+    private fun resolveWindowBackgroundColor(context: Context): Int {
+        val isDarkMode =
+            context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                Configuration.UI_MODE_NIGHT_YES
+        return if (isDarkMode) Color.BLACK else Color.parseColor("#F7F7F7")
+    }
+
+    private class ModuleHostContext(
+        baseContext: Context,
+        private val moduleContext: Context
+    ) : ContextThemeWrapper(baseContext, 0) {
+        private val hostApplicationContext = baseContext.applicationContext ?: baseContext
+        private val moduleTheme by lazy(LazyThreadSafetyMode.NONE) {
+            moduleContext.resources.newTheme().apply {
+                setTo(moduleContext.theme)
+            }
+        }
+
+        override fun getApplicationContext(): Context = hostApplicationContext
+        override fun getAssets(): AssetManager = moduleContext.assets
+        override fun getResources(): Resources = moduleContext.resources
+        override fun getTheme(): Resources.Theme = moduleTheme
+        override fun setTheme(resid: Int) { moduleTheme.applyStyle(resid, true) }
+        override fun getPackageName(): String = moduleContext.packageName
+        override fun getApplicationInfo(): ApplicationInfo = moduleContext.applicationInfo
+        override fun getClassLoader(): ClassLoader = moduleContext.classLoader
+    }
+
+    private class EmbeddedModuleContext(
+        baseContext: Context,
+        private val moduleResources: Resources
+    ) : ContextThemeWrapper(baseContext, 0) {
+        private val hostApplicationContext = baseContext.applicationContext ?: baseContext
+        private val moduleTheme by lazy(LazyThreadSafetyMode.NONE) {
+            moduleResources.newTheme().apply {
+                setTo(baseContext.theme)
+                applyStyle(android.R.style.Theme_DeviceDefault_NoActionBar, true)
+            }
+        }
+
+        override fun getApplicationContext(): Context = hostApplicationContext
+        override fun getAssets(): AssetManager = moduleResources.assets
+        override fun getResources(): Resources = moduleResources
+        override fun getTheme(): Resources.Theme = moduleTheme
+        override fun setTheme(resid: Int) { moduleTheme.applyStyle(resid, true) }
+        override fun getPackageName(): String = MODULE_PACKAGE_NAME
+        override fun getApplicationInfo(): ApplicationInfo = baseContext.applicationInfo
+        override fun getClassLoader(): ClassLoader =
+            DeePXHostLauncher::class.java.classLoader ?: baseContext.classLoader
+    }
+
+    /**
+     * Wraps a host context so that lookups of resources that only exist in the module APK (for
+     * example the {@code m3c_dialog} accessibility string shipped by compose-material3) do not
+     * crash with {@link android.content.res.Resources.NotFoundException}.
+     *
+     * <p>Compose renders almost everything in code, but a few Material 3 helpers still read plain
+     * Android string resources. Those ids are compiled into the module APK and are absent from the
+     * host's Resources, so fetching them throws. Returning an empty string keeps the UI functional.
+     */
+    private class ResourceFallbackContext(base: Context) : android.content.ContextWrapper(base) {
+        override fun getResources(): Resources = FallbackResources(super.getResources())
+    }
+
+    /**
+     * Delegating Resources that swallows lookups of module-only resources. Material 3 reads a few
+     * plain Android string resources ({@code m3c_dialog} etc.) which live in the module APK and are
+     * absent from the host's Resources; without this they throw
+     * {@link android.content.res.Resources.NotFoundException} while building the dialog.
+     */
+    private class FallbackResources(private val base: Resources) :
+        Resources(base.assets, base.displayMetrics, base.configuration) {
+
+        override fun getString(id: Int): String =
+            try { base.getString(id) } catch (t: Throwable) { "" }
+
+        override fun getString(id: Int, vararg formatArgs: Any): String =
+            try { base.getString(id, *formatArgs) } catch (t: Throwable) { "" }
+
+        override fun getText(id: Int): CharSequence =
+            try { base.getText(id) } catch (t: Throwable) { "" }
+
+        override fun getText(id: Int, def: CharSequence): CharSequence =
+            try { base.getText(id, def) } catch (t: Throwable) { def }
+    }
+
+    /**
+     * Installs the three ViewTree owners Compose requires when hosted outside a ComponentActivity.
+     * The legacy page uses a plain android.app.Dialog, so these are absent and ComposeView would
+     * otherwise crash with "ViewTreeLifecycleOwner not found".
+     *
+     * Reflection is used on purpose: the setter symbols moved between lifecycle 2.8 (top-level
+     * extension functions) and 2.9+ (companion members), so binding them at compile time would tie
+     * the build to one lifecycle version.
+     */
+    private fun installComposeViewTreeOwners(view: android.view.View): HostLifecycleOwner {
+        val owner = HostLifecycleOwner()
+        setViewTreeOwner(
+            "androidx.lifecycle.ViewTreeLifecycleOwner",
+            androidx.lifecycle.LifecycleOwner::class.java, view, owner
+        )
+        setViewTreeOwner(
+            "androidx.lifecycle.ViewTreeViewModelStoreOwner",
+            androidx.lifecycle.ViewModelStoreOwner::class.java, view, owner
+        )
+        setViewTreeOwner(
+            "androidx.savedstate.ViewTreeSavedStateRegistryOwner",
+            androidx.savedstate.SavedStateRegistryOwner::class.java, view, owner
+        )
+        // Lets androidx.activity.compose.BackHandler work inside the hosted ComposeView.
+        setViewTreeOwner(
+            "androidx.activity.ViewTreeOnBackPressedDispatcherOwner",
+            androidx.activity.OnBackPressedDispatcherOwner::class.java, view, owner
+        )
+        owner.start()
+        return owner
+    }
+
+    private fun setViewTreeOwner(
+        className: String,
+        ownerType: Class<*>,
+        view: android.view.View,
+        owner: Any,
+    ) {
+        runCatching {
+            val clazz = Class.forName(className)
+            val setter = clazz.methods.firstOrNull { method ->
+                method.parameterTypes.size == 2 &&
+                    method.parameterTypes[0] == android.view.View::class.java &&
+                    method.parameterTypes[1].isAssignableFrom(ownerType)
+            } ?: return@runCatching
+            if (java.lang.reflect.Modifier.isStatic(setter.modifiers)) {
+                setter.invoke(null, view, owner)
+            } else {
+                val companion = clazz.getField("INSTANCE").get(null)
+                setter.invoke(companion, view, owner)
+            }
+        }.onFailure {
+            log("setViewTreeOwner($className) failed: " + it)
+        }
+    }
+
+    /** Minimal owner that immediately reports STARTED/RESUMED for the hosted Compose content. */
+    private class HostLifecycleOwner :
+        androidx.lifecycle.LifecycleOwner,
+        androidx.lifecycle.ViewModelStoreOwner,
+        androidx.savedstate.SavedStateRegistryOwner,
+        androidx.activity.OnBackPressedDispatcherOwner {
+
+        private val lifecycleRegistry = androidx.lifecycle.LifecycleRegistry(this)
+        private val store = androidx.lifecycle.ViewModelStore()
+        private val savedStateController =
+            androidx.savedstate.SavedStateRegistryController.create(this)
+
+        override val lifecycle: androidx.lifecycle.Lifecycle get() = lifecycleRegistry
+        override val viewModelStore: androidx.lifecycle.ViewModelStore get() = store
+        override val savedStateRegistry: androidx.savedstate.SavedStateRegistry
+            get() = savedStateController.savedStateRegistry
+        override val onBackPressedDispatcher: androidx.activity.OnBackPressedDispatcher =
+            androidx.activity.OnBackPressedDispatcher()
+
+        fun start() {
+            savedStateController.performRestore(null)
+            lifecycleRegistry.currentState = androidx.lifecycle.Lifecycle.State.RESUMED
+        }
+    }
+}

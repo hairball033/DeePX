@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Opening page slides in from the right, matching a traditional Activity push. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/decelerate_quint">
+    <translate
+        android:fromXDelta="100%"
+        android:toXDelta="0%"
+        android:duration="280" />
+    <alpha
+        android:fromAlpha="0.85"
+        android:toAlpha="1.0"
+        android:duration="280" />
+</set>

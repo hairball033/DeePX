@@ -1,0 +1,20 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/Download/DeePX开发目录/DeePX/compose-launcher/app/build.gradle.kts",
+      "selection": {
+        "end": {
+          "column": 1,
+          "index": 14596,
+          "line": 358
+        },
+        "start": {
+          "column": 1,
+          "index": 14596,
+          "line": 358
+        }
+      }
+    }
+  ],
+  "selectedFile": "/storage/emulated/0/Download/DeePX开发目录/DeePX/compose-launcher/app/build.gradle.kts"
+}

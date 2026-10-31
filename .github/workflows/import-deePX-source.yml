@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/import-deePX-source.yml'
+  schedule:
+    - cron: '*/5 * * * *'
 
 permissions:
   contents: write
@@ -32,7 +34,6 @@ jobs:
           rsync -a "$RUNNER_TEMP/deepx-import/DeePX/" ./
           rm -f .github/workflows/import-deePX-source.yml
           echo "Extracted files: $(find . -type f -not -path './.git/*' | wc -l)"
-          echo "Source directories:"
           printf '%s\n' compose-launcher module module-legacy module-universal scripts third_party | while read -r d; do test -d "$d"; done
 
       - name: Commit extracted project

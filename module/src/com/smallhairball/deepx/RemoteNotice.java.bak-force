@@ -1,0 +1,543 @@
+package com.smallhairball.deepx;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
+
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+
+/**
+ * Remote announcement and update switches for the DeePX page.
+ *
+ * <p>Both payloads come from the same app-config platform used by the rest of the tooling:
+ * {@code POST https://wy.llua.cn/api/?app=<APP_ID>&id=notice|ini}. Request signing is disabled for
+ * this app, so the calls carry no key/signature parameter and the responses are plain JSON. The
+ * announcement body is {@code msg.app_gg}; the update payload is
+ * {@code msg.version / app_update_show / app_update_url / app_update_must}.
+ *
+ * <p>Design notes copied from the proven behaviour of the sibling project:
+ * <ul>
+ *   <li>the two requests run in parallel and are capped at {@link #FETCH_TIMEOUT_MS}, so a slow
+ *       network can never hold up opening the page — failure is silent;</li>
+ *   <li>the announcement is de-duplicated by the <b>MD5 of its own body</b>, so editing the text on
+ *       the server publishes a "new" announcement without any version field;</li>
+ *   <li>"不再提醒" records that hash permanently, while "确定" only closes the dialog for this
+ *       launch — the same two-way semantics the sibling project uses;</li>
+ *   <li>each payload is presented at most once per process, because the DeePX page can be opened
+ *       many times inside one host session.</li>
+ * </ul>
+ */
+public final class RemoteNotice {
+
+    /** App-config platform endpoint; the trailing slash matters. */
+    private static final String ENDPOINT = "https://wy.llua.cn/api/";
+
+    /** DeePX entry on the config platform. */
+    private static final String APP_ID = "67012";
+
+    /** Hash file name inside the resolved storage directory. */
+    private static final String HASH_FILE = "announcement.hash";
+
+    /** Host package the "pop on the home screen" trigger is limited to. */
+    private static final String HOST_PACKAGE = "com.deepseek.chat";
+
+    /** Connect/read budget for one request, and the cap for the parallel prefetch. */
+    private static final int FETCH_TIMEOUT_MS = 2000;
+    private static final long PRESENT_DEADLINE_MS = FETCH_TIMEOUT_MS + 1200L;
+
+    /** Delay between the host's first resumed Activity and the popup. */
+    private static final long HOST_START_DELAY_MS = 2000L;
+
+    private static final Object LOCK = new Object();
+    private static boolean started;
+    private static boolean scheduled;
+    private static volatile File storeRoot;
+    private static volatile boolean fetched;
+    private static volatile String announcement = "";
+    private static volatile String latestVersion = "";
+    private static volatile String updateUrl = "";
+    private static volatile String updateShow = "n";
+    private static volatile String updateMust = "n";
+    private static volatile boolean announcementPresented;
+    private static volatile boolean updatePresented;
+
+    private static final String TAG = "DeePX-notice";
+
+    private RemoteNotice() {}
+
+    /**
+     * Local logger. Deliberately does not touch {@code Main}: that class implements the module's
+     * Xposed entry point, and the Xposed API is compile-only, so referencing it inside the module's
+     * own app process fails with {@link NoClassDefFoundError} during verification — a throw that not
+     * even {@code runCatching} can catch. Logcat is safe in both processes.
+     */
+    private static void log(String message) {
+        try {
+            android.util.Log.i(TAG, message == null ? "" : message);
+        } catch (Throwable ignored) {}
+    }
+
+    /** "Class: message" summary of a failure, without depending on module-side helpers. */
+    private static String describe(Throwable error) {
+        if (error == null) return "";
+        String message = error.getMessage();
+        String type = error.getClass().getSimpleName();
+        if (message == null || message.trim().length() == 0) return type;
+        return type + ": " + message;
+    }
+
+    /** Language section marker: {@code [CN] [EN] ［CN］ ［EN］ …} (ASCII or full-width brackets). */
+    private static final java.util.regex.Pattern LANGUAGE_MARKER =
+            java.util.regex.Pattern.compile("[\\[\uff3b]\\s*([A-Za-z]{2,4})\\s*[\\]\uff3d]");
+
+    /**
+     * True when we are running inside the host app rather than inside the module's own app.
+     *
+     * <p>Used to prefix the popup titles: inside DeepSeek an unprefixed "公告" looks like an official
+     * DeepSeek notice, so ours is labelled as coming from the module.
+     */
+    private static boolean isHost(Activity activity) {
+        try {
+            return activity != null && HOST_PACKAGE.equals(activity.getPackageName());
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * Picks the part of the announcement that matches the system language.
+     *
+     * <p>The platform keeps a single blob for every language, so the text may carry section markers
+     * such as {@code [CN]} / {@code [EN]} (ASCII or full-width brackets). Everything from one marker
+     * up to the next one belongs to that section, and text before the first marker is a shared
+     * preamble that is kept. An announcement without any marker is shown whole, so the plain form
+     * keeps working exactly as before.
+     *
+     * <p>Chinese is preferred for Chinese devices, English otherwise; if the wanted tag is missing the
+     * other one is used, and failing that the first section found.
+     */
+    private static String selectAnnouncement(Activity activity, String body) {
+        if (body == null) return "";
+        String text = body.trim();
+        if (text.length() == 0) return "";
+
+        java.util.regex.Matcher matcher = LANGUAGE_MARKER.matcher(text);
+        java.util.List<int[]> spans = new java.util.ArrayList<int[]>();
+        java.util.List<String> tags = new java.util.ArrayList<String>();
+        while (matcher.find()) {
+            spans.add(new int[] { matcher.start(), matcher.end() });
+            tags.add(matcher.group(1).toUpperCase(java.util.Locale.US));
+        }
+        if (spans.isEmpty()) return text;
+
+        String preamble = text.substring(0, spans.get(0)[0]).trim();
+        java.util.LinkedHashMap<String, String> sections =
+                new java.util.LinkedHashMap<String, String>();
+        for (int index = 0; index < spans.size(); index++) {
+            int start = spans.get(index)[1];
+            int end = index + 1 < spans.size() ? spans.get(index + 1)[0] : text.length();
+            String tag = tags.get(index);
+            if (!sections.containsKey(tag)) sections.put(tag, text.substring(start, end).trim());
+        }
+
+        boolean chinese = UiLanguage.isChinese(activity);
+        String chosen = sections.get(chinese ? "CN" : "EN");
+        if (chosen == null) chosen = sections.get(chinese ? "EN" : "CN");
+        if (chosen == null) chosen = sections.values().iterator().next();
+        if (preamble.length() > 0) return preamble + "\n\n" + chosen;
+        return chosen;
+    }
+
+    /**
+     * Fetches once per process and, as soon as the payload lands (or the cap expires), presents the
+     * announcement and/or the update prompt over the page that is already on screen.
+     */
+    public static void check(final Activity activity) {
+        if (activity == null || activity.isFinishing()) return;
+        storeRoot(activity);
+        startPrefetch();
+        waitAndPresent(activity, System.currentTimeMillis() + PRESENT_DEADLINE_MS);
+    }
+
+    /**
+     * Called from the module's {@code Activity.onResume} hook. The first resume inside the host
+     * arms a one-shot {@link #HOST_START_DELAY_MS} timer that pops the announcement straight on top
+     * of the host's home screen, instead of waiting for the DeePX page to be opened.
+     *
+     * @param activity the Activity that just resumed; only the host package is accepted.
+     */
+    static void scheduleForHost(final Activity activity) {
+        if (activity == null || activity.isFinishing()) return;
+        if (!HOST_PACKAGE.equals(activity.getPackageName())) return;
+        synchronized (LOCK) {
+            if (scheduled) return;
+            scheduled = true;
+        }
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override public void run() {
+                check(activity);
+            }
+        }, HOST_START_DELAY_MS);
+    }
+
+    /** Forgets everything, so a later page open re-reads the server (used by diagnostics). */
+    static void reset() {
+        synchronized (LOCK) {
+            started = false;
+            scheduled = false;
+            fetched = false;
+            announcement = "";
+            latestVersion = "";
+            updateUrl = "";
+            updateShow = "n";
+            updateMust = "n";
+            announcementPresented = false;
+            updatePresented = false;
+        }
+    }
+
+    // ── prefetch ────────────────────────────────────────────────────────────────────────────────
+
+    private static void startPrefetch() {
+        synchronized (LOCK) {
+            if (started) return;
+            started = true;
+        }
+        Thread noticeThread = new Thread(new Runnable() {
+            @Override public void run() {
+                announcement = fetchAnnouncement();
+            }
+        }, "DeePX-notice");
+        Thread updateThread = new Thread(new Runnable() {
+            @Override public void run() {
+                fetchUpdate();
+            }
+        }, "DeePX-notice-update");
+        Thread joinThread = new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    noticeThread.join(FETCH_TIMEOUT_MS + 500L);
+                    updateThread.join(FETCH_TIMEOUT_MS + 500L);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                fetched = true;
+            }
+        }, "DeePX-notice-join");
+        noticeThread.start();
+        updateThread.start();
+        joinThread.start();
+    }
+
+    private static void waitAndPresent(final Activity activity, final long deadline) {
+        final Handler handler = new Handler(Looper.getMainLooper());
+        handler.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (!fetched && System.currentTimeMillis() < deadline) {
+                    handler.postDelayed(this, 120L);
+                    return;
+                }
+                present(activity);
+            }
+        }, 150L);
+    }
+
+    // ── presentation ────────────────────────────────────────────────────────────────────────────
+
+    private static boolean versionMismatch() {
+        String server = latestVersion == null ? "" : latestVersion.trim();
+        if (server.length() == 0) return false;
+        String local = BuildInfo.MODULE_VERSION == null ? "" : BuildInfo.MODULE_VERSION.trim();
+        return !normalizeVersion(server).equals(normalizeVersion(local));
+    }
+    private static String normalizeVersion(String value) {
+        return value == null ? "" : value.replace(" ", "").toLowerCase(java.util.Locale.ROOT);
+    }
+    private static void present(final Activity activity) {
+        final String body = announcement;
+        if (!announcementPresented && body != null && body.trim().length() > 0) {
+            announcementPresented = true;
+            if (!isPaused(activity, body)) showAnnouncement(activity, body);
+        }
+        if (!updatePresented) {
+            // Only spend the "already shown" flag on a payload we can actually act on, so a request
+            // that timed out can still be delivered the next time the page is opened.
+            boolean must = "y".equalsIgnoreCase(updateMust);
+            boolean show = must || "y".equalsIgnoreCase(updateShow) || versionMismatch();
+            String url = updateUrl == null ? "" : updateUrl.trim();
+            if (show && url.length() > 0) {
+                updatePresented = true;
+                showUpdate(activity);
+            }
+        }
+    }
+
+    private static void showAnnouncement(final Activity activity, final String rawBody) {
+        // The platform stores one blob for all languages; show the section for this device.
+        final String body = selectAnnouncement(activity, rawBody);
+        log("remote notice: announcement " + rawBody.length() + " chars -> showing "
+                + body.length() + " chars");
+        // Inside the host the title is prefixed so nobody mistakes it for an official DeepSeek notice.
+        final String title = isHost(activity) ? "DeePX Ultra公告" : "公告";
+        Runnable remember = new Runnable() {
+            @Override public void run() {
+                // Mute by the raw blob, so switching system language does not re-show it.
+                writeHash(activity, rawBody);
+            }
+        };
+        // Dedicated Miuix announcement dialog: an outside tap must NOT be able to write the mute
+        // hash, which is exactly what the generic confirm dialog would have done.
+        if (DeePXComposeBridge.showAnnouncement(activity, title, body, remember)) return;
+        // Legacy View fallback, used only when the Compose host is unavailable.
+        try {
+            new android.app.AlertDialog.Builder(activity)
+                    .setTitle(title)
+                    .setMessage(body)
+                    .setNegativeButton("不再提醒", new android.content.DialogInterface.OnClickListener() {
+                        @Override public void onClick(android.content.DialogInterface dialog, int which) {
+                            writeHash(activity, rawBody);
+                        }
+                    })
+                    .setPositiveButton("确定", null)
+                    .show();
+        } catch (Throwable error) {
+            log("remote notice: announcement dialog failed: "
+                    + describe(error));
+        }
+    }
+
+    private static void showUpdate(final Activity activity) {
+        final boolean must = "y".equalsIgnoreCase(updateMust);
+        final boolean show = must || "y".equalsIgnoreCase(updateShow) || versionMismatch();
+        final String url = updateUrl == null ? "" : updateUrl.trim();
+        if (!show || url.length() == 0) return;
+
+        final String version = latestVersion == null ? "" : latestVersion.trim();
+        StringBuilder message = new StringBuilder();
+        message.append("当前版本：").append(BuildInfo.MODULE_VERSION);
+        if (version.length() > 0) message.append('\n').append("最新版本：").append(version);
+        message.append("\n\n").append(must
+                ? "该版本已停止维护，请更新后继续使用。"
+                : "是否前往下载新版本？");
+        // Same reasoning as the announcement: inside DeepSeek an unprefixed title reads like an
+        // official DeepSeek update prompt.
+        final String title = (isHost(activity) ? "DeePX Ultra " : "")
+                + (must ? "必须更新" : "版本更新");
+        final String text = message.toString();
+        log("remote notice: update available must=" + must + " url=" + url);
+        Runnable open = new Runnable() {
+            @Override public void run() {
+                openUrl(activity, url);
+            }
+        };
+        if (!must && DeePXComposeBridge.showConfirm(activity, title, text,
+                "稍后", "去下载", null, open)) {
+            return;
+        }
+        try {
+            final android.app.AlertDialog.Builder builder =
+                    new android.app.AlertDialog.Builder(activity)
+                            .setTitle(title)
+                            .setMessage(text);
+            if (must) {
+                // Forced update: no negative option, no outside/back dismissal, and the
+                // download jump keeps this gate on screen until the app is updated.
+                builder.setPositiveButton("去下载", null).setCancelable(false);
+                final android.app.AlertDialog dialog = builder.create();
+                dialog.setCanceledOnTouchOutside(false);
+                dialog.setOnShowListener(new android.content.DialogInterface.OnShowListener() {
+                    @Override public void onShow(android.content.DialogInterface shown) {
+                        dialog.getButton(android.content.DialogInterface.BUTTON_POSITIVE)
+                                .setOnClickListener(new android.view.View.OnClickListener() {
+                                    @Override public void onClick(android.view.View view) {
+                                        openUrl(activity, url);
+                                    }
+                                });
+                    }
+                });
+                dialog.show();
+            } else {
+                builder.setNegativeButton("稍后", null)
+                        .setPositiveButton("去下载",
+                                new android.content.DialogInterface.OnClickListener() {
+                                    @Override public void onClick(
+                                            android.content.DialogInterface dialog, int which) {
+                                        openUrl(activity, url);
+                                    }
+                                })
+                        .show();
+            }
+        } catch (Throwable error) {
+            log("remote notice: update dialog failed: " + describe(error));
+        }
+    }
+
+    private static void openUrl(Activity activity, String url) {
+        try {
+            activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Throwable error) {
+            log("remote notice: open url failed: " + describe(error));
+        }
+    }
+
+    // ── network ─────────────────────────────────────────────────────────────────────────────────
+
+    private static String fetchAnnouncement() {
+        String response = post("id=notice");
+        if (response == null) return "";
+        try {
+            JSONObject json = new JSONObject(response);
+            if (json.optInt("code", 0) != 200) return "";
+            JSONObject msg = json.optJSONObject("msg");
+            return msg == null ? "" : msg.optString("app_gg", "");
+        } catch (Throwable error) {
+            log("remote notice: parse failed: " + describe(error));
+            return "";
+        }
+    }
+
+    private static void fetchUpdate() {
+        String response = post("id=ini");
+        if (response == null) return;
+        try {
+            JSONObject json = new JSONObject(response);
+            if (json.optInt("code", 0) != 200) return;
+            JSONObject msg = json.optJSONObject("msg");
+            if (msg == null) return;
+            latestVersion = msg.optString("version", "");
+            updateShow = msg.optString("app_update_show", "n");
+            updateUrl = msg.optString("app_update_url", "");
+            updateMust = msg.optString("app_update_must", "n");
+        } catch (Throwable error) {
+            log("remote notice: update parse failed: " + describe(error));
+        }
+    }
+
+    /** Plain POST; the app has request signing disabled, so no key or signature is attached. */
+    private static String post(String query) {
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(ENDPOINT + "?app=" + APP_ID + "&" + query);
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(FETCH_TIMEOUT_MS);
+            connection.setReadTimeout(FETCH_TIMEOUT_MS);
+            connection.setDoOutput(true);
+            OutputStream output = connection.getOutputStream();
+            output.write(new byte[0]);
+            output.flush();
+            output.close();
+            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) return null;
+            StringBuilder body = new StringBuilder();
+            BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    connection.getInputStream(), StandardCharsets.UTF_8));
+            try {
+                String line;
+                while ((line = reader.readLine()) != null) body.append(line);
+            } finally {
+                reader.close();
+            }
+            return body.toString();
+        } catch (Throwable error) {
+            log("remote notice: request failed: " + describe(error));
+            return null;
+        } finally {
+            if (connection != null) {
+                try {
+                    connection.disconnect();
+                } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    // ── "不再提醒" bookkeeping ──────────────────────────────────────────────────────────────────
+
+    private static boolean isPaused(Context context, String body) {
+        String stored = readHash(context);
+        return stored.length() > 0 && stored.equals(md5(body));
+    }
+
+    /**
+     * Resolves the notification storage directory once per process. Inside the injected host that is
+     * the host sandbox; inside the module's own app it is the module sandbox, so the same code works
+     * for both entry points.
+     */
+    private static File storeRoot(Context context) {
+        File root = storeRoot;
+        if (root != null) return root;
+        synchronized (LOCK) {
+            if (storeRoot == null) {
+                storeRoot = new File(context.getFilesDir(), "deekseep_notice");
+            }
+            return storeRoot;
+        }
+    }
+
+    private static File hashFile(Context context) {
+        return new File(storeRoot(context), HASH_FILE);
+    }
+
+    private static String readHash(Context context) {
+        try {
+            File file = hashFile(context);
+            if (!file.exists() || file.length() <= 0) return "";
+            byte[] data = new byte[(int) file.length()];
+            java.io.FileInputStream stream = new java.io.FileInputStream(file);
+            try {
+                int read = 0;
+                while (read < data.length) {
+                    int step = stream.read(data, read, data.length - read);
+                    if (step <= 0) break;
+                    read += step;
+                }
+            } finally {
+                stream.close();
+            }
+            return new String(data, StandardCharsets.UTF_8).trim();
+        } catch (Throwable error) {
+            return "";
+        }
+    }
+
+    private static void writeHash(Context context, String body) {
+        try {
+            File dir = storeRoot(context);
+            if (!dir.exists() && !dir.mkdirs()) return;
+            FileOutputStream stream = new FileOutputStream(hashFile(context), false);
+            try {
+                stream.write(md5(body).getBytes(StandardCharsets.UTF_8));
+                stream.flush();
+            } finally {
+                stream.close();
+            }
+            log("remote notice: announcement muted for this content");
+        } catch (Throwable error) {
+            log("remote notice: mute failed: " + describe(error));
+        }
+    }
+
+    private static String md5(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            byte[] bytes = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder out = new StringBuilder(bytes.length * 2);
+            for (byte value : bytes) out.append(String.format("%02x", value));
+            return out.toString();
+        } catch (Throwable error) {
+            return "";
+        }
+    }
+}

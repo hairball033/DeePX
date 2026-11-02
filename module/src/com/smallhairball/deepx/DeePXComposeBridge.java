@@ -1,0 +1,195 @@
+package com.smallhairball.deepx;
+
+import android.app.Activity;
+import android.app.Dialog;
+import java.util.function.Consumer;
+
+/**
+ * Java-side bridge to the Compose/Miuix host page. The Compose side ({@code DeePXHostLauncher})
+ * lives in the merged compose-launcher artifact and cannot be referenced directly from the
+ * View-only module source tree, so it is resolved reflectively. Every entry point returns a
+ * boolean: {@code false} tells the caller to keep the legacy View UI.
+ */
+final class DeePXComposeBridge {
+
+    private static final String LAUNCHER_CLASS = "com.smallhairball.deepx.ui.DeePXHostLauncher";
+
+    private DeePXComposeBridge() {}
+
+    /**
+     * Replaces {@code dialog}'s content view with the Compose/Miuix home page.
+     *
+     * @param handler receives the id of a tapped entry so the Java side can run the original action.
+     * @return {@code true} when the Compose page was attached and the caller must not run the
+     *         legacy View rendering path.
+     */
+    static boolean attachHomePage(Activity activity, Dialog dialog, boolean dark,
+            Consumer<String> handler) {
+        try {
+            Class<?> launcher = Class.forName(LAUNCHER_CLASS);
+            java.lang.reflect.Method method = launcher.getMethod(
+                    "attachHomePage", Activity.class, Dialog.class, boolean.class, Consumer.class);
+            Object result = method.invoke(null, activity, dialog, dark, handler);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * Shows a Material 3 {@code AlertDialog} (Compose) hosted inside the injected process, used for
+     * the open-source license page. Returns {@code false} so the caller can fall back to the legacy
+     * View-based {@code AlertDialog.Builder} when the Compose runtime is unavailable.
+     *
+     * @param onGithub action invoked when the "GitHub" button is tapped.
+     */
+    static boolean showLicenseDialog(Activity activity, String title, String body,
+            String githubLabel, String closeLabel, boolean dark, Runnable onGithub) {
+        try {
+            Class<?> launcher = Class.forName(LAUNCHER_CLASS);
+            java.lang.reflect.Method method = launcher.getMethod(
+                    "showLicenseDialog", Activity.class, String.class, String.class,
+                    String.class, String.class, boolean.class, Runnable.class);
+            Object result = method.invoke(null, activity, title, body,
+                    githubLabel, closeLabel, dark, onGithub);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * Shows the FORCED update gate with Miuix. No cancel path: outside taps and the back key are
+     * ignored and the download action keeps the gate on screen. Returns {@code false} so the caller
+     * can fall back to a strict View dialog when Compose is unavailable.
+     */
+    static boolean showForceUpdate(Activity activity, String title, String message,
+            String positiveLabel, Runnable onPositive) {
+        try {
+            Class<?> launcher = Class.forName(LAUNCHER_CLASS);
+            java.lang.reflect.Method method = launcher.getMethod("showForceUpdateDialog",
+                    Activity.class, String.class, String.class, String.class, Runnable.class);
+            Object result = method.invoke(null, activity, title, message, positiveLabel, onPositive);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+    /**
+     * Routes a back press into the hosted Compose page so an open sub-page is popped before the
+     * whole page dialog is dismissed.
+     *
+     * @return {@code true} when a Compose back dispatcher handled the request.
+     */
+    static boolean dispatchBack(Activity activity) {
+        try {
+            Class<?> launcher = Class.forName(LAUNCHER_CLASS);
+            java.lang.reflect.Method method = launcher.getMethod("dispatchBack", Activity.class);
+            Object result = method.invoke(null, activity);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * Shows the DeePX announcement (Miuix dialog) inside the host process. Returns {@code false} so
+     * the caller can fall back to the legacy View dialog.
+     *
+     * <p>Kept apart from {@link #showConfirm} because that dialog routes an outside tap to the
+     * negative action, which would let an accidental tap permanently mute the announcement. Here
+     * {@code onMute} only runs when the "不再提醒" button itself was used.
+     */
+    static boolean showAnnouncement(Activity activity, String title, String body, Runnable onMute) {
+        try {
+            Class<?> launcher = Class.forName(LAUNCHER_CLASS);
+            java.lang.reflect.Method method = launcher.getMethod("showAnnouncementDialog",
+                    Activity.class, String.class, String.class, Runnable.class);
+            Object result = method.invoke(null, activity, title, body, onMute);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * Shows a Miuix confirm dialog inside the host process. Returns {@code false} so the caller can
+     * fall back to the legacy View dialog when Compose is unavailable.
+     *
+     * @param onNegative nullable "cancel" action.
+     * @param onPositive primary action (may be null).
+     */
+    static boolean showConfirm(Activity activity, String title, String message, String negativeLabel,
+            String positiveLabel, Runnable onNegative, Runnable onPositive) {
+        return showConfirm(activity, title, message, negativeLabel, positiveLabel,
+                onNegative, onPositive, false);
+    }
+
+    /**
+     * Shows a Miuix confirm dialog inside the host process. Returns {@code false} so the caller can
+     * fall back to the legacy View dialog when Compose is unavailable.
+     *
+     * @param verticalButtons stack the actions vertically instead of side-by-side.
+     */
+    static boolean showConfirm(Activity activity, String title, String message, String negativeLabel,
+            String positiveLabel, Runnable onNegative, Runnable onPositive,
+            boolean verticalButtons) {
+        try {
+            Class<?> launcher = Class.forName(LAUNCHER_CLASS);
+            java.lang.reflect.Method method = launcher.getMethod("showConfirmDialog",
+                    Activity.class, String.class, String.class, String.class, String.class,
+                    Runnable.class, Runnable.class, boolean.class);
+            Object result = method.invoke(null, activity, title, message, negativeLabel,
+                    positiveLabel, onNegative, onPositive, verticalButtons);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * Fills an already-creatable full-screen Dialog with the Compose/Miuix task console
+     * ({@code DeePXHostLauncher#attachTaskConsole}). Returns {@code false} so the caller keeps the
+     * legacy View console and its untouched Dialog.
+     *
+     * <p>The caller owns the Dialog on purpose: it applies the same window treatment the Miuix home
+     * page gets (edge-to-edge system bars so the clock/battery stay visible, plus the Activity
+     * push/pop window animation).
+     *
+     * @param title already localized page title, echoed by the Miuix top bar.
+     * @param hint  already localized one-line note, used as the first log line.
+     */
+    static boolean attachTaskConsole(Activity activity, Dialog dialog, boolean dark,
+            String title, String hint) {
+        try {
+            Class<?> launcher = Class.forName(LAUNCHER_CLASS);
+            java.lang.reflect.Method method = launcher.getMethod("attachTaskConsole",
+                    Activity.class, Dialog.class, boolean.class, String.class, String.class);
+            Object result = method.invoke(null, activity, dialog, dark, title, hint);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * Shows a Miuix "processing" dialog (title + indeterminate progress + cycling stage labels)
+     * inside the host process. Returns {@code false} so the caller can fall back to the View dialog.
+     *
+     * @param stages       stage labels shown one after another.
+     * @param stageIntervalMs how long each stage label stays, and thus the total duration.
+     * @param onFinished   run once the dialog has closed on its own.
+     */
+    static boolean showProgress(Activity activity, String title, String[] stages,
+            long stageIntervalMs, Runnable onFinished) {
+        try {
+            Class<?> launcher = Class.forName(LAUNCHER_CLASS);
+            java.lang.reflect.Method method = launcher.getMethod("showProgressDialog",
+                    Activity.class, String.class, String[].class, long.class, Runnable.class);
+            Object result = method.invoke(null, activity, title, stages, stageIntervalMs, onFinished);
+            return result instanceof Boolean && (Boolean) result;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+}

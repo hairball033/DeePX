@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Closing: the current page slides out to the right, matching a traditional Activity pop. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:interpolator="@android:interpolator/decelerate_quint">
+    <translate
+        android:fromXDelta="0%"
+        android:toXDelta="100%"
+        android:duration="240" />
+    <alpha
+        android:fromAlpha="1.0"
+        android:toAlpha="0.85"
+        android:duration="240" />
+</set>

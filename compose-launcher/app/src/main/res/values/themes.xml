@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- DeePX 模块内的 MD3 主题。直接继承 MDC 的 DynamicColors 主题：
+         Android 12+ 用系统壁纸动态取色，12 以下自动回退到 Material3 静态配色。
+         用于模块内的 MDC 弹窗（MaterialAlertDialogBuilder）。 -->
+    <style name="Theme.DeePX.Material3" parent="Theme.Material3.DynamicColors.DayNight.NoActionBar" />
+
+</resources>
